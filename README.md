@@ -1,5 +1,5 @@
 # whisperguikino
-只是一个对个人顺手的工作流程自动化的小GUI软件，建议已经实现本地N卡跑whisper的朋友使用，如果搞不定请勿自我折磨。  
+只是一个对个人顺手的工作流程自动化的小GUI软件，建议已经实现本地N卡跑[faster-whisper](https://github.com/SYSTRAN/faster-whisper)的朋友使用，如果搞不定请勿自我折磨。  
 同时参考了一部分[N46Whisper](https://github.com/Ayanaminn/N46Whisper/)的代码，非常感谢聚聚的贡献。  
 [whisper模型下载](https://github.com/openai/whisper/blob/main/whisper/__init__.py)请自行解决。  
 个人认为whisper的时间轴无法满足对时间轴精度的需求，故程序中只输出文字丢给AI最后再人肉打轴完成字幕工作。不过圈内有使用提示词利用语义与时间轴协同多句合并输出的方法，相关技巧请参考[此教程](https://www.bilibili.com/video/BV1tFhCzcEUA)。  
