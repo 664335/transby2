@@ -19,8 +19,8 @@ from crypto_utils import CryptoUtils
 class TranscriptionApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("语音字幕生成器")
-        self.root.geometry("1600x900")
+        self.root.title("语音字幕生成器(预设:Default)")
+        self.root.geometry("1280x720")
         
         # 文件路径变量
         self.input_file = tk.StringVar()
@@ -34,6 +34,12 @@ class TranscriptionApp:
         self.is_vad_filter = False
         self.set_beam_size = 5
         self.beam_size_off = False
+        
+        # 预设管理
+        self.presets = {}
+        self.current_preset = "Default"
+        self.preset_menu = None
+        self.preset_combo = None
         
         # 模型路径变量
         self.model_path_var = tk.StringVar()
@@ -58,7 +64,8 @@ class TranscriptionApp:
         
         # 加载配置
         self.load_config()
-        
+        self.update_preset_menu()         
+   
         # 进度队列
         self.progress_queue = queue.Queue()
         
@@ -76,7 +83,7 @@ class TranscriptionApp:
         
         # AI翻译选项卡
         self.ai_translation_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.ai_translation_frame, text='AI翻译')
+        self.notebook.add(self.ai_translation_frame, text='翻译')
 
     def create_transcription_widgets(self):
         """创建转写选项卡的UI组件"""
@@ -86,6 +93,16 @@ class TranscriptionApp:
         
         ttk.Button(model_frame, text="选择模型文件夹", command=self.browse_model_folder).grid(row=0, column=0, padx=5)
         ttk.Label(model_frame, textvariable=self.model_path_var, width=50).grid(row=0, column=1, padx=5, sticky="w")
+        
+        # 听写语言选择框架
+        language_frame = ttk.LabelFrame(self.transcription_frame, text="听写语言")
+        language_frame.pack(pady=10, padx=10, fill="x")
+        
+        ttk.Label(language_frame, text="语言:").grid(row=0, column=0, padx=5, sticky="w")
+        self.language_combo = ttk.Combobox(language_frame, values=["日语", "英语"], width=10)
+        self.language_combo.set("日语" if self.language == "ja" else "英语")
+        self.language_combo.grid(row=0, column=1, padx=5, sticky="w")
+        self.language_combo.bind("<<ComboboxSelected>>", self.on_language_change)
         
         # 是否启用AI翻译勾选框（第二行）
         ai_frame = ttk.LabelFrame(self.transcription_frame, text="AI翻译设置")
@@ -125,20 +142,48 @@ class TranscriptionApp:
         ttk.Button(api_frame, text="保存API密钥", command=self.save_api_key).grid(row=0, column=2, padx=5)
         
         # 模型参数框架
-        params_frame = ttk.LabelFrame(self.ai_translation_frame, text="模型参数")
+        params_frame = ttk.LabelFrame(self.ai_translation_frame, text="模型参数(温度越高模型回答的发散)")
         params_frame.pack(pady=10, padx=10, fill="x")
         
         ttk.Label(params_frame, text="模型:").grid(row=0, column=0, padx=5, sticky="w")
         self.model_combo = ttk.Combobox(params_frame, values=["deepseek-chat", "deepseek-reasoner"], width=20)
         self.model_combo.set(self.ai_model)
         self.model_combo.grid(row=0, column=1, padx=5, sticky="w")
+        self.model_combo.bind("<<ComboboxSelected>>", lambda e: self.update_window_title())
         
         ttk.Label(params_frame, text="温度:").grid(row=0, column=2, padx=5, sticky="w")
-        self.temperature_scale = ttk.Scale(params_frame, from_=0.1, to=2.0, value=self.temperature, orient="horizontal")
+        self.temperature_scale = ttk.Scale(params_frame, from_=0.0, to=2.0, value=self.temperature, orient="horizontal")
         self.temperature_scale.grid(row=0, column=3, padx=5, sticky="w")
+        # 设置温度刻度的步进为0.1
+        self.temperature_scale.configure(command=lambda value: [self.update_temperature_label(value), self.update_window_title()])
         self.temperature_label = ttk.Label(params_frame, text=f"{self.temperature:.1f}")
         self.temperature_label.grid(row=0, column=4, padx=5, sticky="w")
-        self.temperature_scale.configure(command=self.update_temperature_label)
+        
+        # 预设框架
+        preset_frame = ttk.LabelFrame(self.ai_translation_frame, text="预设")
+        preset_frame.pack(pady=10, padx=10, fill="x")
+        
+        ttk.Label(preset_frame, text="预设:").grid(row=0, column=0, padx=5, sticky="w")
+        
+        # 预设下拉菜单按钮
+        self.preset_button = ttk.Menubutton(preset_frame, text="预设", width=15)
+        self.preset_menu = tk.Menu(self.preset_button, tearoff=0)
+        self.preset_button.configure(menu=self.preset_menu)
+        self.preset_button.grid(row=0, column=1, padx=5, sticky="w")
+        
+        # 初始化预设菜单
+        self.update_preset_menu()
+        
+        # 字幕文件操作框架
+        subtitle_frame = ttk.LabelFrame(self.ai_translation_frame, text="字幕文件操作")
+        subtitle_frame.pack(pady=10, padx=10, fill="x")
+        
+        ttk.Button(subtitle_frame, text="提交字幕", command=self.submit_subtitle).grid(row=0, column=0, padx=5)
+        ttk.Button(subtitle_frame, text="开始翻译", command=self.start_translation).grid(row=0, column=1, padx=5)
+        
+        # 字幕文件路径显示
+        self.subtitle_file_var = tk.StringVar()
+        ttk.Label(subtitle_frame, textvariable=self.subtitle_file_var, width=50).grid(row=0, column=2, padx=5, sticky="w")
         
         # 系统提示词框架
         prompt_frame = ttk.LabelFrame(self.ai_translation_frame, text="系统提示词")
@@ -148,7 +193,181 @@ class TranscriptionApp:
         self.prompt_text.insert("1.0", self.system_prompt)
         self.prompt_text.pack(pady=5, padx=5, fill="both", expand=True)
         
-        ttk.Button(prompt_frame, text="保存提示词", command=self.save_prompt).pack(pady=5)
+        # 绑定文本变化事件来检测参数修改
+        self.prompt_text.bind("<KeyRelease>", lambda e: self.update_window_title())
+        
+        ttk.Button(prompt_frame, text="保存预设", command=self.save_preset).pack(pady=5)
+
+    def submit_subtitle(self):
+        """提交字幕文件"""
+        file_path = filedialog.askopenfilename(
+            title="选择字幕文件",
+            filetypes=[("字幕文件", "*.ass *.txt"), ("所有文件", "*.*")]
+        )
+        if file_path:
+            self.subtitle_file_var.set(file_path)
+            self.log(f"已选择字幕文件: {file_path}")
+            
+            # 根据文件类型判断并提取文本
+            file_ext = os.path.splitext(file_path)[1].lower()
+            if file_ext == '.ass':
+                self.extract_text_from_ass(file_path)
+            elif file_ext == '.txt':
+                self.extract_text_from_txt(file_path)
+            else:
+                messagebox.showwarning("警告", "不支持的文件类型，请选择.ass或.txt文件")
+
+    def extract_text_from_ass(self, file_path):
+        """从ASS文件中提取文本"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # 跳过ASS文件头部信息（通常是前13行）
+            text_lines = []
+            for line in lines[13:]:
+                # 处理ASS格式：查找包含",,0,0,0,,"的行并提取文本
+                if ',,0,0,0,,' in line:
+                    # 分割行并提取文本部分
+                    parts = line.split(',,0,0,0,,')
+                    if len(parts) > 1:
+                        text = parts[1].strip()
+                        if text:
+                            text_lines.append(text)
+            
+            if text_lines:
+                # 将文本保存为临时文件用于翻译
+                temp_file = os.path.join(os.path.dirname(file_path), "temp_subtitle.txt")
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(text_lines))
+                
+                self.log(f"已从ASS文件中提取 {len(text_lines)} 行文本")                
+                return temp_file
+            else:
+                messagebox.showwarning("警告", "未找到有效的字幕文本")
+                return None
+                
+        except Exception as e:
+            messagebox.showerror("错误", f"读取ASS文件失败: {str(e)}")
+            return None
+
+    def extract_text_from_txt(self, file_path):
+        """从TXT文件中提取文本"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 简单的文本处理：按行分割并过滤空行
+            lines = [line.strip() for line in content.split('\n') if line.strip()]
+            
+            if lines:
+                # 将文本保存为临时文件用于翻译
+                temp_file = os.path.join(os.path.dirname(file_path), "temp_subtitle.txt")
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(lines))
+                
+                self.log(f"已从TXT文件中提取 {len(lines)} 行文本")
+                self.log(f"临时文件已保存: {temp_file}")
+                return temp_file
+            else:
+                messagebox.showwarning("警告", "TXT文件中没有有效文本")
+                return None
+                
+        except Exception as e:
+            messagebox.showerror("错误", f"读取TXT文件失败: {str(e)}")
+            return None
+
+    def start_translation(self):
+        """开始翻译字幕"""
+        if not self.subtitle_file_var.get():
+            messagebox.showerror("错误", "请先提交字幕文件")
+            return
+        
+        if not self.api_key:
+            messagebox.showerror("错误", "请先设置API密钥")
+            return
+        
+        # 禁用按钮防止重复点击
+        self.log("开始翻译字幕...")
+        
+        # 启动后台线程
+        threading.Thread(target=self.run_batch_translation, daemon=True).start()
+
+    def run_batch_translation(self):
+        """执行分批翻译"""
+        try:
+            subtitle_file = self.subtitle_file_var.get()
+            file_ext = os.path.splitext(subtitle_file)[1].lower()
+            
+            # 根据文件类型提取文本
+            if file_ext == '.ass':
+                temp_file = self.extract_text_from_ass(subtitle_file)
+            elif file_ext == '.txt':
+                temp_file = self.extract_text_from_txt(subtitle_file)
+            else:
+                self.log("错误: 不支持的文件类型")
+                return
+            
+            if not temp_file or not os.path.exists(temp_file):
+                self.log("错误: 无法提取字幕文本")
+                return
+            
+            # 读取文本内容
+            with open(temp_file, 'r', encoding='utf-8') as f:
+                all_lines = f.readlines()
+            
+            # 分批处理（每400行一批）
+            batch_size = 400
+            total_batches = (len(all_lines) + batch_size - 1) // batch_size
+            
+            self.log(f"开始分批翻译，共 {len(all_lines)} 行，分为 {total_batches} 批")
+            
+            all_translated_content = []
+            
+            for batch_num in range(total_batches):
+                start_idx = batch_num * batch_size
+                end_idx = min((batch_num + 1) * batch_size, len(all_lines))
+                
+                batch_lines = all_lines[start_idx:end_idx]
+                batch_text = ''.join(batch_lines)
+                
+                self.log(f"正在翻译第 {batch_num + 1}/{total_batches} 批 ({len(batch_lines)} 行)")
+                
+                # 调用AI翻译API
+                translated_batch = self.call_ai_translation_api(batch_text)
+                all_translated_content.append(translated_batch)
+                
+                # 添加批次分隔符（除了最后一批）
+                if batch_num < total_batches - 1:
+                    all_translated_content.append('\n\n\n')
+                
+                self.log(f"第 {batch_num + 1} 批翻译完成")
+            
+            # 保存翻译结果
+            output_dir = os.path.dirname(subtitle_file)
+            base_name = os.path.splitext(os.path.basename(subtitle_file))[0]
+            output_file = os.path.join(output_dir, f"{base_name}_translated.txt")
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(''.join(all_translated_content))
+            
+            # 清理临时文件
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            
+            self.log(f"翻译完成！结果已保存到: {output_file}")
+            
+        except Exception as e:
+            self.log(f"翻译失败: {str(e)}")
+
+    def on_language_change(self, event):
+        """语言选择变更事件"""
+        selected_language = self.language_combo.get()
+        if selected_language == "日语":
+            self.language = "ja"
+        elif selected_language == "英语":
+            self.language = "en"
+        self.log(f"听写语言已设置为: {selected_language}")
 
     def update_temperature_label(self, value):
         """更新温度标签"""
@@ -176,11 +395,13 @@ class TranscriptionApp:
         ttk.Label(dialog, text="本程序默认使用deepseek，请在下方输入您的API秘钥").pack(pady=10)
         
         ttk.Label(dialog, text="API密钥:").pack()
-        api_entry = ttk.Entry(dialog, width=40, show="*")
+        #api_entry = ttk.Entry(dialog, width=40, show="*")
+        api_entry = ttk.Entry(dialog, width=40)
         api_entry.pack(pady=5)
         
         ttk.Label(dialog, text="加密密码（用于保护API密钥）:").pack()
-        password_entry = ttk.Entry(dialog, width=40, show="*")
+        #password_entry = ttk.Entry(dialog, width=40, show="*")
+        password_entry = ttk.Entry(dialog, width=40)
         password_entry.pack(pady=5)
         
         def save_and_close():
@@ -204,21 +425,93 @@ class TranscriptionApp:
         
         ttk.Button(dialog, text="保存", command=save_and_close).pack(pady=5)
 
+    def validate_api_key(self, api_key):
+        """验证API密钥有效性"""
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            }
+            
+            # 发送一个简单的测试请求来验证API密钥
+            data = {
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "user", "content": "Hello"}
+                ],
+                "max_tokens": 10,
+                "temperature": 0.1
+            }
+            
+            response = requests.post(
+                "https://api.deepseek.com/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                self.log("API密钥验证成功")
+                return True
+            else:
+                # 根据错误代码提供自然语言提示
+                error_code = response.status_code
+                error_message = self.get_api_error_message(error_code, response.text)
+                self.log(f"API密钥验证失败: {error_message}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            self.log("API验证超时，请检查网络连接")
+            return False
+        except requests.exceptions.ConnectionError:
+            self.log("网络连接错误，请检查网络连接")
+            return False
+        except Exception as e:
+            self.log(f"API验证过程中发生错误: {str(e)}")
+            return False
+    
+    def get_api_error_message(self, error_code, response_text):
+        """根据错误代码返回自然语言错误提示"""
+        try:
+            error_data = json.loads(response_text)
+            error_detail = error_data.get('error', {}).get('message', '未知错误')
+        except:
+            error_detail = response_text
+        
+        error_messages = {
+            400: f"请求参数错误: {error_detail}",
+            401: "API密钥无效或已过期，请检查密钥是否正确",
+            403: "API密钥权限不足，请检查密钥权限",
+            404: "API端点不存在，请检查API地址",
+            429: "请求频率过高，请稍后重试",
+            500: "服务器内部错误，请稍后重试",
+            502: "网关错误，请稍后重试",
+            503: "服务暂时不可用，请稍后重试",
+            504: "网关超时，请稍后重试"
+        }
+        
+        return error_messages.get(error_code, f"未知错误 (代码: {error_code}): {error_detail}")
+    
     def save_api_key(self):
         """保存API密钥"""
         api_key = self.api_key_entry.get().strip()
         if api_key:
             # 如果API密钥不是已加密的标记，则要求输入密码进行加密
             if api_key != "***已加密***":
-                password = tk.simpledialog.askstring("加密密码", "请输入加密密码:", show="*")
+                password = tk.simpledialog.askstring("加密密码", "请输入加密密码:")
                 if password:
                     try:
-                        encrypted_api_key = self.crypto.encrypt_data(api_key, password)
-                        self.api_key = encrypted_api_key
-                        self.api_key_entry.delete(0, tk.END)
-                        self.api_key_entry.insert(0, "***已加密***")
-                        self.save_config()
-                        self.log("API密钥已加密保存")
+                        # 先验证API密钥有效性
+                        self.log("正在验证API密钥...")
+                        if self.validate_api_key(api_key):
+                            encrypted_api_key = self.crypto.encrypt_data(api_key, password)
+                            self.api_key = encrypted_api_key
+                            self.api_key_entry.delete(0, tk.END)
+                            self.api_key_entry.insert(0, "***已加密***")
+                            self.save_config()
+                            self.log("API密钥验证成功并已加密保存")
+                        else:
+                            self.log("API密钥验证失败，请检查密钥是否正确")
                     except Exception as e:
                         messagebox.showerror("错误", f"加密失败: {str(e)}")
                 else:
@@ -229,12 +522,6 @@ class TranscriptionApp:
                 self.log("API密钥已保存")
         else:
             messagebox.showwarning("警告", "请输入有效的API密钥")
-
-    def save_prompt(self):
-        """保存系统提示词"""
-        self.system_prompt = self.prompt_text.get("1.0", tk.END).strip()
-        self.save_config()
-        self.log("系统提示词已保存")
 
     def load_config(self):
         """加载配置文件"""
@@ -256,7 +543,7 @@ class TranscriptionApp:
                         # 尝试检测是否为加密数据
                         if self.crypto.is_encrypted(api_key):
                             # 要求输入密码解密
-                            password = tk.simpledialog.askstring("解密密码", "请输入解密密码:", show="*")
+                            password = tk.simpledialog.askstring("解密密码", "请输入解密密码:")
                             if password:
                                 try:
                                     self.api_key = self.crypto.decrypt_data(api_key, password)
@@ -275,8 +562,12 @@ class TranscriptionApp:
                         self.api_key = api_key
                     
                     self.ai_model = config.get('ai_model', 'deepseek-chat')
-                    self.temperature = config.get('temperature', 0.7)
+                    self.temperature = config.get('temperature', 1.3)
                     self.system_prompt = config.get('system_prompt', '你是一个专业的翻译助手，请将以下日文字幕翻译成中文，保持原有的格式和结构。')
+                    
+                    # 加载预设信息
+                    self.presets = config.get('presets', {})
+                    self.current_preset = config.get('current_preset')
                     
                     # 更新UI
                     self.api_key_entry.delete(0, tk.END)
@@ -288,7 +579,7 @@ class TranscriptionApp:
                     self.temperature_scale.set(self.temperature)
                     self.temperature_label.config(text=f"{self.temperature:.1f}")
                     self.prompt_text.delete("1.0", tk.END)
-                    self.prompt_text.insert("1.0", self.system_prompt)
+                    self.prompt_text.insert("1.0", self.system_prompt) 
                     
                     self.log(f"已加载配置，模型路径: {self.model_path}")
                     if self.enable_ai_translation.get():
@@ -307,7 +598,9 @@ class TranscriptionApp:
                 'api_key': self.api_key,
                 'ai_model': self.ai_model,
                 'temperature': self.temperature,
-                'system_prompt': self.system_prompt
+                'system_prompt': self.system_prompt,
+                'presets': self.presets,
+                'current_preset': self.current_preset
             }
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
@@ -361,8 +654,7 @@ class TranscriptionApp:
             # 确定模型路径
             if self.model_path:
                 # 使用用户选择的模型路径
-                model_path = self.model_path
-                self.log(f"使用用户选择的模型路径: {model_path}")
+                model_path = self.model_path                
             else:
                 # 使用默认路径
                 if getattr(sys,'frozen',False):
@@ -400,17 +692,17 @@ class TranscriptionApp:
             segments = self.transcribe_audio(temp_audio_path)
             
             # 生成字幕文件
-            self.progress_queue.put(("progress", 70))
+            self.progress_queue.put(("progress", 50))
             self.generate_subtitles(segments, base_name, file_path)
             
             # 如果启用AI翻译，执行翻译
             if self.enable_ai_translation.get():
+                self.progress_queue.put(("progress", 70))                
+                #threading.Thread(target=self.run_batch_translation, daemon=True).start()
+                self.start_translation()
                 self.progress_queue.put(("progress", 80))
-                self.log("开始AI翻译...")
-                self.run_ai_translation(base_name, file_path)
-            
+                self.progress_queue.put(("message", "听写任务处理完成，AI翻译正在后台运行"))
             self.progress_queue.put(("progress", 100))
-            self.progress_queue.put(("message", "处理完成！"))
             torch.cuda.empty_cache()
             
             # 如果是视频文件，删除临时音频文件
@@ -465,8 +757,8 @@ class TranscriptionApp:
             ass_path = srt2ass(srt_filename, self.is_split, self.split_method, file_path)            
             
             # 生成适合ai翻译的字幕格式
-            output_file_name = f"{base_name}_forgpt"
-            output_file_name += '.ass'
+            output_file_name = f"{base_name}_forAI"
+            output_file_name += '.txt'
             output_file_path = os.path.join(os.path.dirname(file_path), output_file_name)    
             input_file_name = base_name+'.ass'
             input_file_path = os.path.join(os.path.dirname(file_path), input_file_name)
@@ -485,15 +777,14 @@ class TranscriptionApp:
                         struct.append(line[50:count1-1])
                         if count2 == 400: 
                             struct.append('\n\n\n')
-                            count2 = 0            
-                
+                            count2 = 0                 
                 with open(output_file_path, 'w', encoding='utf-8') as output_file:        
                     output_file.write('\n'.join(struct))
-                
+                self.subtitle_file_var.set(input_file_path)
                 self.log(f"已生成字幕文件: {input_file_path}")
                 self.log(f"已生成AI翻译用字幕文件: {output_file_path}")
                 print(f"ASS subtitle saved as: {base_name}.ass")
-                print(f"And output {base_name}_forgpt.ass")
+                print(f"And output {base_name}_forAI.txt")
                 print('字幕生成完毕 subtitle generated!')
             else:
                 self.log(f"警告: 未找到字幕文件 {input_file_path}")
@@ -505,42 +796,7 @@ class TranscriptionApp:
                 os.remove(ass_path)                
         except Exception as e:
             raise Exception(f"生成字幕失败: {str(e)}")
-
-    def run_ai_translation(self, base_name, file_path):
-        """执行AI翻译"""
-        try:
-            if not self.api_key:
-                self.log("错误: 未设置API密钥")
-                return
-                
-            # 构建字幕文件路径
-            subtitle_file = f"{base_name}_forgpt.ass"
-            subtitle_path = os.path.join(os.path.dirname(file_path), subtitle_file)
-            
-            if not os.path.exists(subtitle_path):
-                self.log(f"错误: 未找到字幕文件 {subtitle_path}")
-                return
-                
-            # 读取字幕文件
-            with open(subtitle_path, 'r', encoding='utf-8') as f:
-                subtitle_content = f.read()
-                
-            # 调用AI翻译API
-            self.log("正在调用AI翻译API...")
-            translated_content = self.call_ai_translation_api(subtitle_content)
-            
-            # 保存翻译结果
-            translated_file = f"{base_name}_translated.ass"
-            translated_path = os.path.join(os.path.dirname(file_path), translated_file)
-            
-            with open(translated_path, 'w', encoding='utf-8') as f:
-                f.write(translated_content)
-                
-            self.log(f"AI翻译完成: {translated_path}")
-            
-        except Exception as e:
-            self.log(f"AI翻译失败: {str(e)}")
-
+        
     def call_ai_translation_api(self, content):
         """调用AI翻译API，包含重试机制"""
         max_retries = 3
@@ -548,9 +804,24 @@ class TranscriptionApp:
         
         for attempt in range(max_retries):
             try:
+                # 检查API密钥是否需要解密
+                api_key_to_use = self.api_key
+                if self.api_key and self.api_key != "***已加密***" and self.crypto.is_encrypted(self.api_key):
+                    # 要求输入密码解密
+                    password = tk.simpledialog.askstring("解密密码", "请输入解密密码:")
+                    if password:
+                        try:
+                            api_key_to_use = self.crypto.decrypt_data(self.api_key, password)
+                            self.log("API密钥已成功解密")
+                        except Exception as e:
+                            self.log(f"API密钥解密失败: {str(e)}")
+                            raise Exception("API密钥解密失败")
+                    else:
+                        raise Exception("未输入密码，无法解密API密钥")
+                
                 headers = {
                     "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}"
+                    "Authorization": f"Bearer {api_key_to_use}"
                 }
                 
                 data = {
@@ -576,7 +847,7 @@ class TranscriptionApp:
                 
                 if response.status_code == 200:
                     result = response.json()
-                    self.log("AI翻译API调用成功")
+                    #self.log("AI翻译API调用成功")
                     return result["choices"][0]["message"]["content"]
                 else:
                     error_msg = f"API调用失败: {response.status_code} - {response.text}"
@@ -647,6 +918,264 @@ class TranscriptionApp:
         
         # 继续检查
         self.root.after(100, self.check_progress)
+
+    def update_preset_menu(self):
+        """更新预设菜单"""
+        # 清空菜单
+        self.preset_menu.delete(0, tk.END)
+        
+        # 添加预设管理选项（按照用户要求的顺序）
+        self.preset_menu.add_command(label="新建", command=self.create_preset)
+        self.preset_menu.add_command(label="重命名", command=self.rename_preset)
+        self.preset_menu.add_command(label="删除", command=self.delete_preset)
+        self.preset_menu.add_command(label="导出预设集", command=self.export_presets)
+        self.preset_menu.add_command(label="导入预设集", command=self.import_presets) 
+        
+        # 添加分隔线
+        self.preset_menu.add_separator()
+        
+        # 添加预设列表，按顺序显示所有预设
+        if self.presets:
+            # 按预设名称排序
+            sorted_preset_names = sorted(self.presets.keys())
+            
+            for preset_name in sorted_preset_names:
+                # 如果是当前预设，添加选中标记
+                display_name = f"✓ {preset_name}" if preset_name == self.current_preset else preset_name
+                
+                self.preset_menu.add_command(
+                    label=display_name, 
+                    command=lambda name=preset_name: self.select_preset(name)
+                )
+        else:
+            # 如果没有预设，显示默认选项
+            self.preset_menu.add_command(
+                label="Default",
+                command=lambda: self.select_preset("Default")
+            )
+        
+        # 更新按钮文本
+        self.preset_button.config(text=self.current_preset)
+        
+        # 更新窗口标题
+        self.update_window_title()
+
+    def create_preset(self):
+        """创建新预设"""
+        preset_name = tk.simpledialog.askstring("新建预设", "输入新预设名:")
+        if preset_name and preset_name.strip():
+            preset_name = preset_name.strip()
+            if preset_name in self.presets:
+                messagebox.showwarning("警告", f"预设 '{preset_name}' 已存在")
+                return
+            
+            # 获取当前系统提示词
+            current_prompt = self.prompt_text.get("1.0", tk.END).strip()
+            
+            # 创建新预设
+            self.presets[preset_name] = {
+                "system_prompt": current_prompt,
+                "ai_model": self.ai_model,
+                "temperature": self.temperature
+            }
+            
+            # 清空系统提示词框
+            self.prompt_text.delete("1.0", tk.END)
+            
+            # 切换到新预设
+            self.current_preset = preset_name
+            self.update_preset_menu()
+            self.log(f"已创建预设: {preset_name}")
+        else:
+            messagebox.showwarning("警告", "请输入有效的预设名")
+
+
+
+    def rename_preset(self):
+        """重命名当前预设"""
+        if self.current_preset not in self.presets:
+            messagebox.showwarning("警告", "请先选择或创建一个预设")
+            return
+        
+        new_name = tk.simpledialog.askstring("重命名预设", "输入新预设名:", initialvalue=self.current_preset)
+        if new_name and new_name.strip():
+            new_name = new_name.strip()
+            if new_name == self.current_preset:
+                return
+            
+            if new_name in self.presets:
+                messagebox.showwarning("警告", f"预设 '{new_name}' 已存在")
+                return
+            
+            # 重命名预设
+            self.presets[new_name] = self.presets.pop(self.current_preset)
+            self.current_preset = new_name
+            self.update_preset_menu()
+            self.log(f"已重命名预设为: {new_name}")
+
+    def delete_preset(self):
+        """删除当前预设"""
+        if self.current_preset not in self.presets:
+            messagebox.showwarning("警告", "请先选择或创建一个预设")
+            return
+        
+        if messagebox.askyesno("确认删除", f"确定要删除预设 '{self.current_preset}' 吗？"):
+            del self.presets[self.current_preset]
+            
+            # 如果删除了当前预设，切换到默认预设
+            if self.current_preset not in self.presets:
+                self.current_preset = "Default"
+                self.system_prompt = "你是一个专业的翻译助手，请将以下日文字幕翻译成中文，保持原有的格式和结构。"
+                self.prompt_text.delete("1.0", tk.END)
+                self.prompt_text.insert("1.0", self.system_prompt)
+            
+            self.update_preset_menu()
+            self.log(f"已删除预设: {self.current_preset}")
+
+    def select_preset(self, preset_name):
+        """选择预设"""
+        if preset_name in self.presets:
+            self.current_preset = preset_name
+            preset_data = self.presets[preset_name]
+            
+            # 更新系统提示词
+            self.system_prompt = preset_data.get("system_prompt", "")
+            self.prompt_text.delete("1.0", tk.END)
+            self.prompt_text.insert("1.0", self.system_prompt)
+            
+            # 更新模型参数
+            self.ai_model = preset_data.get("ai_model", self.ai_model)
+            self.temperature = preset_data.get("temperature", self.temperature)
+            
+            # 更新UI
+            self.model_combo.set(self.ai_model)
+            self.temperature_scale.set(self.temperature)
+            self.temperature_label.config(text=f"{self.temperature:.1f}")
+            
+            self.update_preset_menu()
+            self.log(f"已切换到预设: {preset_name}")
+
+    def export_presets(self):
+        """导出预设集"""
+        if not self.presets:
+            messagebox.showwarning("警告", "没有预设可导出")
+            return
+        
+        # 生成文件名
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d%H%M")
+        filename = f"presets_{timestamp}.json"
+        
+        # 选择保存位置
+        file_path = filedialog.asksaveasfilename(
+            title="导出预设集",
+            defaultextension=".json",
+            filetypes=[("JSON文件", "*.json")],
+            initialfile=filename
+        )
+        
+        if file_path:
+            try:
+                # 只导出预设信息
+                export_data = {
+                    "presets": self.presets
+                }
+                
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(export_data, f, ensure_ascii=False, indent=2)
+                
+                self.log(f"预设集已导出到: {file_path}")
+            except Exception as e:
+                messagebox.showerror("错误", f"导出失败: {str(e)}")
+
+    def import_presets(self):
+        """导入预设集"""
+        file_path = filedialog.askopenfilename(
+            title="导入预设集",
+            filetypes=[("JSON文件", "*.json")]
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    import_data = json.load(f)
+                
+                imported_presets = import_data.get("presets", {})
+                
+                if not imported_presets:
+                    messagebox.showwarning("警告", "导入的文件中没有预设数据")
+                    return
+                
+                # 合并预设，处理重名
+                for preset_name, preset_data in imported_presets.items():
+                    new_name = preset_name
+                    counter = 1
+                    
+                    # 处理重名
+                    while new_name in self.presets:
+                        new_name = f"{preset_name}{counter}"
+                        counter += 1
+                    
+                    self.presets[new_name] = preset_data                
+                
+                self.log(f"已导入预设集，共 {len(imported_presets)} 个预设")
+                self.save_preset()
+            except Exception as e:
+                messagebox.showerror("错误", f"导入失败: {str(e)}")
+
+    def update_window_title(self):
+        """更新窗口标题，在预设参数改变时显示*号"""
+        # 检查当前参数是否与保存的预设匹配
+        is_modified = False
+        
+        if self.current_preset in self.presets:
+            preset_data = self.presets[self.current_preset]
+            current_prompt = self.prompt_text.get("1.0", tk.END).strip()
+            current_model = self.model_combo.get()
+            current_temperature = float(self.temperature_scale.get())
+            
+            # 检查是否有参数改变
+            if (current_prompt != preset_data.get("system_prompt", "") or
+                current_model != preset_data.get("ai_model", "") or
+                current_temperature != preset_data.get("temperature", 1.3)):
+                is_modified = True
+        
+        # 更新窗口标题
+        if is_modified:
+            self.root.title(f"语音字幕生成器(预设:*{self.current_preset})")
+        else:
+            self.root.title(f"语音字幕生成器(预设:{self.current_preset})")
+
+    def save_preset(self):
+        """保存当前预设"""
+        if not self.current_preset:
+            messagebox.showwarning("警告", "请先选择或创建一个预设")
+            return
+        
+        # 获取当前系统提示词 模型 温度
+        current_prompt = self.prompt_text.get("1.0", tk.END).strip()
+        current_model = self.model_combo.get()
+        current_temperature = float(self.temperature_scale.get())
+
+        # 保存预设信息
+        self.presets[self.current_preset] = {
+            "system_prompt": current_prompt,
+            "ai_model": current_model,
+            "temperature": current_temperature
+        }
+        
+        # 更新当前实例的配置
+        self.system_prompt = current_prompt
+        self.ai_model = current_model
+        self.temperature = current_temperature
+        
+        # 保存到config文件
+        self.save_config()
+        
+        # 更新预设组合框
+        self.update_preset_menu()
+        
+        self.log(f"已保存预设: {self.current_preset}")
 
 # 主程序入口
 if __name__ == "__main__":
