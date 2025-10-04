@@ -12,11 +12,12 @@ from srt2ass import srt2ass
 import ffmpeg
 import sys
 import json
-import requests
+import requests  
 import time
 from crypto_utils import CryptoUtils
-import google.generativeai as genai
-from google.api_core import exceptions
+# 延迟导入Google库，避免在程序启动时初始化
+# import google.generativeai as genai
+# from google.api_core import exceptions
 
 class TranscriptionApp:
     def __init__(self, root):
@@ -27,7 +28,7 @@ class TranscriptionApp:
         # 文件路径变量
         self.input_file = tk.StringVar()
         self.output_dir = tk.StringVar()
-        
+        self.subtitle_file_var = tk.StringVar()
         # 模型参数
         self.model_size = "large-v2"
         self.language = "ja"
@@ -42,6 +43,8 @@ class TranscriptionApp:
         self.current_preset = "Default"
         self.preset_menu = None
         self.preset_combo = None
+        # self.preset_modified = False  # 标记当前预设是否被修改
+        self.is_modified = False  # 参数修改标记
         
         # 模型路径变量
         self.model_path_var = tk.StringVar()
@@ -76,6 +79,7 @@ class TranscriptionApp:
         
         # 加密工具
         self.crypto = CryptoUtils()
+        # self.configloaded = False
         
         # 创建选项卡
         self.create_notebook()
@@ -87,6 +91,7 @@ class TranscriptionApp:
         # 加载配置
         self.load_config()
         self.update_preset_menu()         
+        self.save_preset()
    
         # 进度队列
         self.progress_queue = queue.Queue()
@@ -181,14 +186,15 @@ class TranscriptionApp:
         ttk.Label(params_frame, text="模型:").grid(row=0, column=0, padx=5, sticky="w")
         self.model_combo = ttk.Combobox(params_frame, values=["deepseek-chat", "deepseek-reasoner"], width=20)
         self.model_combo.set(self.ai_model)
-        self.model_combo.grid(row=0, column=1, padx=5, sticky="w")
-        self.model_combo.bind("<<ComboboxSelected>>", lambda e: self.update_window_title())
+        self.model_combo.grid(row=0, column=1, padx=5, sticky="w")      
+        self.model_combo.bind("<<ComboboxSelected>>", lambda e: self.check_preset_if_modified())
         
         ttk.Label(params_frame, text="温度:").grid(row=0, column=2, padx=5, sticky="w")
         self.temperature_scale = ttk.Scale(params_frame, from_=0.0, to=2.0, value=self.temperature, orient="horizontal")
         self.temperature_scale.grid(row=0, column=3, padx=5, sticky="w")
         # 设置温度刻度的步进为0.1
-        self.temperature_scale.configure(command=lambda value: [self.update_temperature_label(value), self.update_window_title()])
+        
+        self.temperature_scale.configure(command=lambda value: [self.update_temperature_label(value), self.check_preset_if_modified()])
         self.temperature_label = ttk.Label(params_frame, text=f"{self.temperature:.1f}")
         self.temperature_label.grid(row=0, column=4, padx=5, sticky="w")
         
@@ -205,7 +211,7 @@ class TranscriptionApp:
         self.preset_button.grid(row=0, column=1, padx=5, sticky="w")
         
         # 初始化预设菜单
-        self.update_preset_menu()
+        # self.update_preset_menu()
         
         # 字幕文件操作框架
         subtitle_frame = ttk.LabelFrame(self.ai_translation_frame, text="字幕文件操作")
@@ -214,8 +220,7 @@ class TranscriptionApp:
         ttk.Button(subtitle_frame, text="提交字幕", command=self.submit_subtitle).grid(row=0, column=0, padx=5)
         ttk.Button(subtitle_frame, text="开始翻译", command=self.start_translation).grid(row=0, column=1, padx=5)
         
-        # 字幕文件路径显示
-        self.subtitle_file_var = tk.StringVar()
+        # 字幕文件路径显示        
         ttk.Label(subtitle_frame, textvariable=self.subtitle_file_var, width=50).grid(row=0, column=2, padx=5, sticky="w")
         
         # 系统提示词框架
@@ -227,9 +232,10 @@ class TranscriptionApp:
         self.prompt_text.pack(pady=5, padx=5, fill="both", expand=True)
         
         # 绑定文本变化事件来检测参数修改
-        self.prompt_text.bind("<KeyRelease>", lambda e: self.update_window_title())
+        self.prompt_text.bind("<KeyRelease>", lambda e: self.check_preset_if_modified())
         
-        ttk.Button(prompt_frame, text="保存预设", command=self.save_preset).pack(pady=5)
+        ttk.Button(prompt_frame, text="保存预设", command=self.save_preset).pack(pady=5)      
+
 
     def submit_subtitle(self):
         """提交字幕文件"""
@@ -241,15 +247,6 @@ class TranscriptionApp:
             self.subtitle_file_var.set(file_path)
             self.log(f"已选择字幕文件: {file_path}")
             
-            # 根据文件类型判断并提取文本
-            # file_ext = os.path.splitext(file_path)[1].lower()
-            # if file_ext == '.ass':
-            #     self.extract_text_from_ass(file_path)
-            # elif file_ext == '.txt':
-            #     self.extract_text_from_txt(file_path)
-            # else:
-            #     messagebox.showwarning("警告", "不支持的文件类型，请选择.ass或.txt文件")
-            
 
     def extract_text_from_ass(self, file_path):
         """从ASS文件中提取文本"""
@@ -257,9 +254,11 @@ class TranscriptionApp:
             with open(file_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
-            # 跳过ASS文件头部信息（通常是前13行）
+            # 动态检测ASS文件头部信息
+            header_end_index = self._find_ass_header_end(lines)
+            
             text_lines = []
-            for line in lines[13:]:
+            for line in lines[header_end_index:]:
                 # 处理ASS格式：查找包含",,0,0,0,,"的行并提取文本
                 if ',,0,0,0,,' in line:
                     # 分割行并提取文本部分
@@ -285,6 +284,42 @@ class TranscriptionApp:
             messagebox.showerror("错误", f"读取ASS文件失败: {str(e)}")
             return None
 
+    def _find_ass_header_end(self, lines):
+        """动态查找ASS文件头部信息的结束位置"""
+        script_info_found = False
+        format_line_found = False
+        header_end_index = 0
+        
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            
+            # 查找 [Script Info] 部分
+            if line_stripped.startswith('[Script Info]'):
+                script_info_found = True
+                continue           
+
+            # 查找 Format: 行
+            if script_info_found and line_stripped.startswith('Format:'):
+                format_line_found = True
+                # 检查是否包含完整的格式字段
+                if all(field in line for field in ['Layer', 'Start', 'End', 'Style', 'Actor', 'MarginL', 'MarginR', 'MarginV', 'Effect', 'Text']):
+                    header_end_index = i + 1
+                    break
+        
+        # 如果没有找到 [Events] 部分，但找到了格式行，则假设格式行之后就是字幕内容
+        if not header_end_index and format_line_found:
+            for i, line in enumerate(lines):
+                if line.strip().startswith('Dialogue:'):
+                    header_end_index = i
+                    break
+        
+        # 如果仍然没有找到，使用默认的13行作为回退
+        if not header_end_index:
+            header_end_index = 13
+        
+        # self.log(f"检测到ASS文件头部结束位置: 第{header_end_index}行")
+        return header_end_index
+
     def extract_text_from_txt(self, file_path):
         """从TXT文件中提取文本"""
         try:
@@ -300,8 +335,7 @@ class TranscriptionApp:
                 with open(temp_file, 'w', encoding='utf-8') as f:
                     f.write('\n'.join(lines))
                 
-                self.log(f"已从TXT文件中提取 {len(lines)} 行文本")
-                #self.log(f"临时文件已保存: {temp_file}")
+                self.log(f"已从TXT文件中提取 {len(lines)} 行文本")                
                 return temp_file
             else:
                 messagebox.showwarning("警告", "TXT文件中没有有效文本")
@@ -330,7 +364,7 @@ class TranscriptionApp:
         self.save_preset()
         # 禁用按钮防止重复点击
         self.log("开始翻译字幕...")
-        
+        self.save_preset()
         # 启动后台线程
         threading.Thread(target=self.run_batch_translation, daemon=True).start()
 
@@ -375,8 +409,8 @@ class TranscriptionApp:
                 self.log(f"正在翻译第 {batch_num + 1}/{total_batches} 批 ({len(batch_lines)} 行)")
                 
                 # 调用AI翻译API
-                translated_batch = self.call_ai_translation_api(batch_text)
-                all_translated_content.append(translated_batch)
+                translated_batch = self.call_ai_translation_api(batch_text)                
+                all_translated_content.append(translated_batch)              
                 
                 #添加批次分隔符（除了最后一批）
                 if batch_num < total_batches - 1:
@@ -389,11 +423,11 @@ class TranscriptionApp:
             translated_lines = [str(line).strip() for line in all_translated_content if str(line).strip()]
             for content in translated_lines:
                 if content.strip():  # 文本处理：去除空行，并将"，"和"。"替换为空格                              
-                    processed_line = content.strip().replace('，', ' ').replace('。', ' ').replace('“', '「').replace('”', '」').replace('《', '『').replace('》', '』') .replace('！', ' ').replace('？', '吗').replace('\n', '\nDialogue: 0,0:00:00.00,0:00:00.00,default,,0,0,0,,')
+                    processed_line = content.strip().replace('，', ' ').replace('。', ' ').replace('、', ' ').replace('“', '「').replace('”', '」').replace('《', '『').replace('》', '』') .replace('！', ' ').replace('？', '吗').replace('\n', '\nDialogue: 0,0:00:00.00,0:00:00.00,default,,0,0,0,,')
                     # 为每一行翻译文本添加时间轴前缀
                     processed_line = f"Dialogue: 0,0:00:00.00,0:00:00.00,default,,0,0,0,,{processed_line}"
                     processed_content.append(processed_line)
-
+            
             processed_content[len(processed_content)-1] += "\n"
                                 
             base_name = os.path.splitext(os.path.basename(subtitle_file))[0]
@@ -402,10 +436,12 @@ class TranscriptionApp:
             if file_ext == '.ass':
                 with open(subtitle_file, 'r', encoding='utf-8') as f:
                     original_lines = f.readlines()                
-                # 提取原始ASS文件的头部信息（通常是前13行）
-                header_lines = original_lines[:13]                
-                # 提取原始字幕内容（从第14行开始）
-                original_subtitle_lines = original_lines[13:]
+                # 动态检测ASS文件头部信息的结束位置
+                header_end_index = self._find_ass_header_end(original_lines)
+                # 提取原始ASS文件的头部信息
+                header_lines = original_lines[:header_end_index]                
+                # 提取原始字幕内容
+                original_subtitle_lines = original_lines[header_end_index:]
                 with open(output_file, 'w', encoding='utf-8') as f:
                     # 写入原始ASS头部
                     f.writelines(header_lines)    
@@ -429,7 +465,149 @@ class TranscriptionApp:
             
         except Exception as e:
             self.log(f"翻译失败: {str(e)}")
+    def call_ai_translation_api(self, content):
+        """调用AI翻译API，包含重试机制"""
+        max_retries = 3
+        retry_delay = 5  # 秒
+        
+        # 获取当前服务商配置
+        selected_provider = self.provider_var.get()
+        provider_config = self.providers.get(selected_provider, self.providers["DeepSeek"])
+        api_url = provider_config["api_url"]
+        for attempt in range(max_retries):
+            # 根据服务商构建请求
+            if selected_provider == "Genimi":
+                # 延迟导入Google库，避免在程序启动时初始化
+                try:
+                    import google.generativeai as genai
+                    from google.api_core import exceptions
+                except ImportError:
+                    self.log("错误: 无法导入Google库，请确保已安装google-generativeai")
+                    return None, "无法导入Google库"
+                  
+                try:
+                    # 1. 配置genai库 (在实际应用中，如果已验证过，此步骤可省略)
+                    genai.configure(api_key=self.current_api_key)
+                    
+                    # 2. 初始化模型
+                    model = genai.GenerativeModel(self.ai_model)
+                    
+                    # 3. 发送请求        
+                    self.system_prompt += "\n"
+                    self.system_prompt += content
+                    
+                    response = model.generate_content(self.system_prompt)
+                    
+                    # 4. 检查是否有内容被安全设置阻止
+                    #    response.text 会在被阻止时直接抛出异常，我们可以用更安全的方式检查
+                    if not response.parts:
+                        if response.prompt_feedback.block_reason:
+                            block_reason_name = response.prompt_feedback.block_reason.name
+                            return None, f"请求被模型的内容安全策略阻止，原因：{block_reason_name}。请尝试修改您的输入内容。"
+                        else:
+                            return None, "模型没有返回任何内容，可能是由于输入不明确或触发了未知的安全限制。"
+                    
+                    # 5. 提取并返回文本内容
+                    return response.text
+                
+                except exceptions.PermissionDenied:
+                    return None, "文本生成失败：权限被拒绝。您的API密钥似乎是无效的，请重新检查。"
+                except ValueError as e:
+                    # response.text 在内容被阻止时会抛出 ValueError
+                    return None, f"内容生成被阻止。这通常是由于Google的安全设置。请尝试修改输入内容。详细信息: {e}"
+                except exceptions.InvalidArgument:
+                    # 捕获无效参数错误，有时可能是因为prompt内容有问题
+                    return None, "文本生成失败：请求参数无效。请检查您的输入内容是否符合要求。"
+                except Exception as e:
+                    # 捕获其他所有可能的异常
+                    return None, f"文本生成过程中发生未知错误，请检查网络连接或服务状态。详细错误信息：{e}"
+                
+            else:
+                try:
+                    # DeepSeek和OpenAI格式
+                    # 增加超时时间，特别是对于PyInstaller打包后的程序
+                    timeout_value = 120  # 2分钟超时
+                    headers = {
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.current_api_key}"
+                    }
+                    
+                    data = {
+                        "model": self.ai_model,
+                        "messages": [
+                            {"role": "system", "content": self.system_prompt},
+                            {"role": "user", "content": content}
+                        ],
+                        "temperature": self.temperature,
+                        "stream": False
+                    }
+                    
+                    full_url = api_url
+                    response = requests.post(
+                        full_url,
+                        headers=headers,
+                        json=data,
+                        timeout=timeout_value
+                    )            
 
+                    if response.status_code == 200:
+                        result = response.json()  
+                        # DeepSeek和OpenAI响应格式
+                        return result["choices"][0]["message"]["content"]                            
+                    else:
+                        error_msg = f"{selected_provider} API调用失败: {response.status_code} - {response.text}"
+                        self.log(f"API错误: {error_msg}")
+                        
+                        # 如果是服务器错误，重试
+                        if response.status_code >= 500:
+                            if attempt < max_retries - 1:
+                                self.log(f"服务器错误，{retry_delay}秒后重试...")
+                                time.sleep(retry_delay)
+                                continue
+                            else:
+                                return None, f"服务器错误，重试{max_retries}次后仍失败"
+                        else:
+                            return None, error_msg
+                            
+                except requests.exceptions.Timeout:
+                    if attempt < max_retries - 1:
+                        self.log(f"请求超时，{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        return None, f"请求超时，重试{max_retries}次后仍失败"
+                except requests.exceptions.ConnectionError:
+                    if attempt < max_retries - 1:
+                        self.log(f"连接错误，{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        return None, f"连接错误，重试{max_retries}次后仍失败"
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        self.log(f"未知错误: {str(e)}，{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                        continue
+                except requests.exceptions.ConnectionError:
+                    if attempt < max_retries - 1:
+                        self.log(f"连接错误，{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        self.log(f"连接错误，重试{max_retries}次后仍失败")
+                        return None
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        self.log(f"未知错误: {str(e)}，{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        self.log(f"未知错误: {str(e)}，重试{max_retries}次后仍失败")
+                        return None
+        
+        self.log(f"重试{max_retries}次后仍失败")
+        return None
+    
     def on_language_change(self, event):
         """语言选择变更事件"""
         selected_language = self.language_combo.get()
@@ -465,7 +643,6 @@ class TranscriptionApp:
                 self.api_key_entry.insert(0, self.current_api_key)
             
             self.log(f"已切换到服务商: {selected_provider}")
-            self.save_config()
 
     def update_temperature_label(self, value):
         """更新温度标签"""
@@ -526,9 +703,16 @@ class TranscriptionApp:
         """验证API密钥有效性"""
         current_provider = self.provider_var.get()
         provider_config = self.providers.get(current_provider, self.providers["DeepSeek"])
-        api_url = provider_config["api_url"]     
-        # api_key = ''
+        api_url = provider_config["api_url"]  
         if current_provider == "Genimi":
+            # 延迟导入Google库，避免在程序启动时初始化
+            try:
+                import google.generativeai as genai
+                from google.api_core import exceptions
+            except ImportError:
+                self.log("错误: 无法导入Google库，请确保已安装google-generativeai")
+                return False
+                
             test_model = 'gemini-2.5-flash'
             genai.configure(api_key=api_key)
             try:
@@ -540,26 +724,27 @@ class TranscriptionApp:
                 
                 # 检查响应
                 if response.text:
-                    print("API密钥验证成功！此密钥有效且可用。")
+                    # 移除这里的成功日志，由save_api_key函数统一处理
                     return True
-                else:                    
-                    return False, "API响应为空。"             
+                else:    
+                    self.log("Gemini API响应为空")                
+                    return False
             except exceptions.PermissionDenied:
                 # 捕获权限错误，这通常意味着API密钥是错误的或未启用服务
-                print("API密钥验证失败：权限被拒绝。请仔细检查您的API密钥是否正确，以及是否已在Google AI Studio中启用了API服务。")
+                self.log("API密钥验证失败：权限被拒绝。请仔细检查您的API密钥是否正确，以及是否已在Google AI Studio中启用了API服务。")
                 return False
             except exceptions.Unauthenticated:
                 # 捕获身份验证失败错误
-                print("API密钥验证失败：身份验证错误。这几乎总是由于API密钥不正确或格式错误导致的。")
+                self.log("API密钥验证失败：身份验证错误。这几乎总是由于API密钥不正确或格式错误导致的。")
                 return False
             except Exception as e:
                 # 捕获其他所有可能的异常，如网络连接问题
-                print("验证过程中发生未知错误，请检查您的网络连接或稍后再试。详细错误信息：{e}")
-                return False          
+                self.log(f"验证过程中发生未知错误，请检查您的网络连接或稍后再试。详细错误信息：{e}")
+                return False
                       
         else:
             try:
-            # DeepSeek和OpenAI API验证
+                # DeepSeek和OpenAI API验证
                 headers = {
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {api_key}"
@@ -739,7 +924,14 @@ class TranscriptionApp:
                     
                     # 更新服务商选择
                     self.provider_combo.set(self.provider_var.get())
-                    self.on_provider_change(None)  # 触发服务商变更以更新模型选项
+                    # 避免在程序启动时触发服务商变更，防止Google库过早初始化
+                    # self.on_provider_change(None)  # 触发服务商变更以更新模型选项
+                    
+                    # 手动更新模型选项，避免调用on_provider_change
+                    selected_provider = self.provider_var.get()
+                    if selected_provider in self.providers:
+                        provider_config = self.providers[selected_provider]
+                        self.model_combo['values'] = provider_config["model_options"]
                     
                     self.model_combo.set(self.ai_model)
                     self.temperature_scale.set(self.temperature)
@@ -797,6 +989,7 @@ class TranscriptionApp:
             self.model = None
 
     def log(self, message):
+        """听写选项卡的日志输出"""
         self.log_text.config(state=tk.NORMAL)
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
@@ -851,24 +1044,20 @@ class TranscriptionApp:
             
             # 生成字幕文件
             self.progress_queue.put(("progress", 50))
-            self.generate_subtitles(segments, base_name, file_path)
-            
+            self.generate_subtitles(segments, base_name, file_path)            
+
             # 如果启用AI翻译，执行翻译
-            if self.enable_ai_translation.get():
-                self.progress_queue.put(("progress", 70))
-                
+            if self.enable_ai_translation.get():               
                 # 在主线程中检查API密钥状态，避免异步操作错误
                 def check_and_start_translation():
                     success, message = self.ensure_api_key_ready()
                     if success:
                         self.log("API密钥准备就绪，开始翻译...")
                         # 启动翻译线程
-                        threading.Thread(target=self.run_batch_translation, daemon=True).start()
-                        self.progress_queue.put(("progress", 80))
+                        threading.Thread(target=self.run_batch_translation, daemon=True).start()                        
                         self.progress_queue.put(("message", "听写任务处理完成，AI翻译正在后台运行"))
                     else:
-                        self.progress_queue.put(("error", f"AI翻译无法启动: {message}"))
-                        self.progress_queue.put(("progress", 100))
+                        self.progress_queue.put(("error", f"AI翻译无法启动: {message}"))           
                 
                 # 在主线程中执行API密钥检查
                 self.root.after(0, check_and_start_translation)
@@ -934,19 +1123,19 @@ class TranscriptionApp:
             
             # 处理字幕文件用于AI翻译
             if os.path.exists(origin_sub_file_path):
-                with open(origin_sub_file_path, 'r', encoding='utf-8') as input_file:
-                    lines = input_file.readlines()[13:]        
-                    struct = []
-                    count2 = 0
-                    for line in lines: 
-                        count1 = 0
-                        count2 = count2 + 1   
-                        for bit in line:                   
-                            count1 = count1 + 1   
-                        struct.append(line[50:count1-1])
-                        if count2 == 400: 
-                            struct.append('\n\n\n')
-                            count2 = 0                 
+                # with open(origin_sub_file_path, 'r', encoding='utf-8') as input_file:
+                #     lines = input_file.readlines()[13:]        
+                #     struct = []
+                #     count2 = 0
+                #     for line in lines: 
+                #         count1 = 0
+                #         count2 = count2 + 1   
+                #         for bit in line:                   
+                #             count1 = count1 + 1   
+                #         struct.append(line[50:count1-1])
+                #         if count2 == 400: 
+                #             struct.append('\n\n\n')
+                #             count2 = 0                 
                 # with open(forAI_file_path, 'w', encoding='utf-8') as output_file:        
                 #     output_file.write('\n'.join(struct))
                 self.subtitle_file_var.set(origin_sub_file_path)
@@ -1044,133 +1233,7 @@ class TranscriptionApp:
         else:
             return False, "未输入密码，无法解密API密钥"
     
-    def call_ai_translation_api(self, content):
-        """调用AI翻译API，包含重试机制"""
-        max_retries = 3
-        retry_delay = 5  # 秒
-        
-        # 获取当前服务商配置
-        selected_provider = self.provider_var.get()
-        provider_config = self.providers.get(selected_provider, self.providers["DeepSeek"])
-        api_url = provider_config["api_url"]
-        for attempt in range(max_retries):
-            # 根据服务商构建请求
-            if selected_provider == "Genimi":                  
-                try:
-                    # 1. 配置genai库 (在实际应用中，如果已验证过，此步骤可省略)
-                    genai.configure(api_key=self.current_api_key)
-                    
-                    # 2. 初始化模型
-                    model = genai.GenerativeModel(self.ai_model)
-                    
-                    # 3. 发送请求        
-                    self.system_prompt += "\n"
-                    self.system_prompt += content
-                    
-                    response = model.generate_content(self.system_prompt)
-                    
-                    # 4. 检查是否有内容被安全设置阻止
-                    #    response.text 会在被阻止时直接抛出异常，我们可以用更安全的方式检查
-                    if not response.parts:
-                        if response.prompt_feedback.block_reason:
-                            block_reason_name = response.prompt_feedback.block_reason.name
-                            return None, f"请求被模型的内容安全策略阻止，原因：{block_reason_name}。请尝试修改您的输入内容。"
-                        else:
-                            return None, "模型没有返回任何内容，可能是由于输入不明确或触发了未知的安全限制。"
 
-                    # 5. 提取并返回文本内容
-                    return response.text
-                
-                except exceptions.PermissionDenied:
-                    return None, "文本生成失败：权限被拒绝。您的API密钥似乎是无效的，请重新检查。"
-                except ValueError as e:
-                    # response.text 在内容被阻止时会抛出 ValueError
-                    return None, f"内容生成被阻止。这通常是由于Google的安全设置。请尝试修改输入内容。详细信息: {e}"
-                except exceptions.InvalidArgument:
-                    # 捕获无效参数错误，有时可能是因为prompt内容有问题
-                    return None, "文本生成失败：请求参数无效。请检查您的输入内容是否符合要求。"
-                except Exception as e:
-                    # 捕获其他所有可能的异常
-                    return None, f"文本生成过程中发生未知错误，请检查网络连接或服务状态。详细错误信息：{e}"
-                
-            else:
-                try:
-                    # DeepSeek和OpenAI格式
-                    # 增加超时时间，特别是对于PyInstaller打包后的程序
-                    timeout_value = 120  # 2分钟超时
-                    headers = {
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {self.current_api_key}"
-                    }
-                    
-                    data = {
-                        "model": self.ai_model,
-                        "messages": [
-                            {"role": "system", "content": self.system_prompt},
-                            {"role": "user", "content": content}
-                        ],
-                        "temperature": self.temperature,
-                        "stream": False
-                    }
-                    
-                    full_url = api_url
-                    response = requests.post(
-                        full_url,
-                        headers=headers,
-                        json=data,
-                        timeout=timeout_value
-                    )            
-
-                    if response.status_code == 200:
-                        result = response.json()  
-                        # DeepSeek和OpenAI响应格式
-                        return result["choices"][0]["message"]["content"]                            
-                    else:
-                        error_msg = f"{selected_provider} API调用失败: {response.status_code} - {response.text}"
-                        self.log(f"API错误: {error_msg}")
-                        
-                        # 如果是服务器错误，重试
-                        if response.status_code >= 500:
-                            if attempt < max_retries - 1:
-                                self.log(f"服务器错误，{retry_delay}秒后重试...")
-                                time.sleep(retry_delay)
-                                retry_delay *= 2  # 指数退避
-                                continue
-                        
-                        raise Exception(error_msg)
-                        
-                except requests.exceptions.Timeout:
-                    self.log(f"{selected_provider} API调用超时 (尝试 {attempt + 1}/{max_retries})")
-                    if attempt < max_retries - 1:
-                        self.log(f"{retry_delay}秒后重试...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # 指数退避
-                        continue
-                    else:
-                        raise Exception(f"{selected_provider} AI翻译API调用超时: 多次重试后仍然失败")
-                        
-                except requests.exceptions.ConnectionError as e:
-                    self.log(f"网络连接错误 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
-                    if attempt < max_retries - 1:
-                        self.log(f"{retry_delay}秒后重试...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # 指数退避
-                        continue
-                    else:
-                        raise Exception(f"网络连接失败: {str(e)}")
-                        
-                except Exception as e:
-                    self.log(f"API调用异常 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
-                    if attempt < max_retries - 1:
-                        self.log(f"{retry_delay}秒后重试...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # 指数退避
-                        continue
-                    else:
-                        raise Exception(f"{selected_provider} AI翻译API调用失败: {str(e)}")            
-        self.log(f"正在调用{selected_provider}翻译API (尝试 {attempt + 1}/{max_retries})...")
-        # 如果所有重试都失败
-        raise Exception(f"{selected_provider} AI翻译API调用失败: 所有重试尝试均失败")
 
     def check_progress(self):
         """检查进度队列并更新UI"""
@@ -1197,137 +1260,205 @@ class TranscriptionApp:
 
     def update_preset_menu(self):
         """更新预设菜单"""
-        # 清空菜单
-        self.preset_menu.delete(0, tk.END)
-        
-        # 添加预设管理选项（按照用户要求的顺序）
-        self.preset_menu.add_command(label="新建", command=self.create_preset)
-        self.preset_menu.add_command(label="重命名", command=self.rename_preset)
-        self.preset_menu.add_command(label="删除", command=self.delete_preset)
-        self.preset_menu.add_command(label="导出预设集", command=self.export_presets)
-        self.preset_menu.add_command(label="导入预设集", command=self.import_presets) 
-        
-        # 添加分隔线
-        self.preset_menu.add_separator()
-        
-        # 添加预设列表，按顺序显示所有预设
-        if self.presets:
-            # 按预设名称排序
-            sorted_preset_names = sorted(self.presets.keys())
-            
-            for preset_name in sorted_preset_names:
-                # 如果是当前预设，添加选中标记
-                display_name = f"✓ {preset_name}" if preset_name == self.current_preset else preset_name
-                
-                self.preset_menu.add_command(
-                    label=display_name, 
-                    command=lambda name=preset_name: self.select_preset(name)
-                )
-        else:
-            # 如果没有预设，显示默认选项
-            self.preset_menu.add_command(
-                label="Default",
-                command=lambda: self.select_preset("Default")
-            )
-        
-        # 更新按钮文本
-        self.preset_button.config(text=self.current_preset)
-        
+        # 更新预设菜单前检查当前预设参数是否已保存   
         # 更新窗口标题
-        self.update_window_title()
+        
+        if self.preset_menu:
+            self.preset_menu.delete(0, tk.END)
+            
+            # 添加预设管理选项（按照用户要求的顺序）
+            self.preset_menu.add_command(label="新建", command=self.create_preset)
+            self.preset_menu.add_command(label="重命名", command=self.rename_preset)
+            self.preset_menu.add_command(label="删除当前预设", command=self.delete_preset)
+            self.preset_menu.add_command(label="导出预设集", command=self.export_presets)
+            self.preset_menu.add_command(label="导入预设集", command=self.import_presets) 
+
+            # 添加分隔线
+            self.preset_menu.add_separator()
+            
+            # 添加预设列表，按顺序显示所有预设
+            if self.presets:
+                # 按预设名称排序
+                sorted_preset_names = sorted(self.presets.keys())
+                
+                for preset_name in sorted_preset_names:
+                    # 如果是当前预设，添加选中标记
+                    display_name = f"✓ {preset_name}" if preset_name == self.current_preset else preset_name
+                    
+                    self.preset_menu.add_command(
+                        label=display_name, 
+                        command=lambda name=preset_name: self.select_preset(name)
+                    )
+            else:
+                # 如果没有预设，显示默认选项
+                self.preset_menu.add_command(
+                    label="Default",
+                    command=lambda: self.select_preset("Default")
+                )
+
+            # 更新按钮文本
+            self.preset_button.config(text=self.current_preset)
+
+        # 更新窗口标题
+        self.root.title(f"语音字幕生成器(预设:{self.current_preset})")
 
     def create_preset(self):
         """创建新预设"""
-        preset_name = tk.simpledialog.askstring("新建预设", "输入新预设名:")
-        if preset_name and preset_name.strip():
-            preset_name = preset_name.strip()
+        preset_name = tk.simpledialog.askstring("创建预设", "请输入预设名称:")
+        if preset_name:
             if preset_name in self.presets:
                 messagebox.showwarning("警告", f"预设 '{preset_name}' 已存在")
                 return
             
-            # 获取当前系统提示词
-            current_prompt = self.prompt_text.get("1.0", tk.END).strip()
-            
             # 创建新预设
             self.presets[preset_name] = {
-                "system_prompt": current_prompt,
-                "ai_model": self.ai_model,
-                "temperature": self.temperature
+                'ai_model': self.ai_model,
+                'temperature': self.temperature,
+                'system_prompt': self.system_prompt,
+                'provider': self.provider_var.get()
             }
             
-            # 清空系统提示词框
-            self.prompt_text.delete("1.0", tk.END)
-            
-            # 切换到新预设
             self.current_preset = preset_name
             self.update_preset_menu()
+            self.save_preset()
+            self.save_config()
             self.log(f"已创建预设: {preset_name}")
-        else:
-            messagebox.showwarning("警告", "请输入有效的预设名")
 
     def rename_preset(self):
-        """重命名当前预设"""
-        if self.current_preset not in self.presets:
-            messagebox.showwarning("警告", "请先选择或创建一个预设")
+        """重命名预设"""
+        if not self.presets:
+            messagebox.showwarning("警告", "没有可重命名的预设")
             return
         
-        new_name = tk.simpledialog.askstring("重命名预设", "输入新预设名:", initialvalue=self.current_preset)
-        if new_name and new_name.strip():
-            new_name = new_name.strip()
-            if new_name == self.current_preset:
-                return
-            
-            if new_name in self.presets:
-                messagebox.showwarning("警告", f"预设 '{new_name}' 已存在")
-                return
-            
+        old_name = self.current_preset        
+        new_name = tk.simpledialog.askstring("  ", "请输入新的预设名称:")       
+        if new_name in self.presets:
+            messagebox.showwarning("警告", f"预设 '{new_name}' 已存在")
+            return
+        else:
             # 重命名预设
-            self.presets[new_name] = self.presets.pop(self.current_preset)
-            self.current_preset = new_name
+            self.presets[new_name] = self.presets.pop(old_name)
+            
+            # 更新当前预设            
+            self.current_preset = new_name            
             self.update_preset_menu()
-            self.log(f"已重命名预设为: {new_name}")
+            self.save_preset()
+            self.save_config()
+            self.log(f"已将预设 '{old_name}' 重命名为 '{new_name}'")
 
     def delete_preset(self):
-        """删除当前预设"""
-        if self.current_preset not in self.presets:
-            messagebox.showwarning("警告", "请先选择或创建一个预设")
+        """删除预设"""
+        if not self.presets:
+            messagebox.showwarning("警告", "没有可删除的预设")
             return
         
-        if messagebox.askyesno("确认删除", f"确定要删除预设 '{self.current_preset}' 吗？"):
-            del self.presets[self.current_preset]
+        preset_name = self.current_preset
+        if preset_name and preset_name in self.presets:
+            if len(self.presets) == 1:
+                messagebox.showwarning("警告", "不能删除唯一预设")
+                return
             
-            # 如果删除了当前预设，切换到默认预设
-            if self.current_preset not in self.presets:
-                self.current_preset = "Default"
-                self.system_prompt = "你是一个专业的翻译助手，请将以下日文字幕翻译成中文，保持原有的格式和结构。"
+            if messagebox.askyesno("确认删除", f"确定要删除预设 '{preset_name}' 吗？"):
+                # 删除预设
+                del self.presets[preset_name]
+                self.log(f"已删除预设: {preset_name}")
+                # 更新当前预设和UI  
+                self.current_preset = list(self.presets.keys())[0]
+                preset_name = self.current_preset
+                preset = self.presets[preset_name]
+                self.ai_model = preset['ai_model']
+                self.temperature = preset['temperature']
+                self.system_prompt = preset['system_prompt']
+                self.provider_var.set(preset['provider'])
+                self.current_preset = preset_name
+                
+                # 更新UI
+                self.model_combo.set(self.ai_model)
+                self.temperature_scale.set(self.temperature)
+                self.temperature_label.config(text=f"{self.temperature:.1f}")
                 self.prompt_text.delete("1.0", tk.END)
                 self.prompt_text.insert("1.0", self.system_prompt)
-            
-            self.update_preset_menu()
-            self.log(f"已删除预设: {self.current_preset}")
+                
+                # 更新服务商选择
+                self.provider_combo.set(self.provider_var.get())
+                                
+                # 手动更新模型选项，避免调用on_provider_change
+                selected_provider = self.provider_var.get()
+                if selected_provider in self.providers:
+                    provider_config = self.providers[selected_provider]
+                    self.model_combo['values'] = provider_config["model_options"]                  
+                
+                self.update_window_title()
+                self.update_preset_menu()
+                self.save_preset()
+                self.save_config()
+                
+        else:
+            messagebox.showwarning("警告", f"预设 '{preset_name}' 不存在")
 
     def select_preset(self, preset_name):
         """选择预设"""
         if preset_name in self.presets:
+            preset = self.presets[preset_name]
+            
+            # 检查当前预设是否有未保存的修改
+            if self.is_modified:
+                # 弹出确认对话框
+                result = messagebox.askyesnocancel(
+                    "未保存的修改", 
+                    f"当前预设 '{self.current_preset}' 有未保存的修改。\n\n是否保存当前预设？\n\n是：保存当前预设并切换到 '{preset_name}'\n否：不保存修改，直接切换到 '{preset_name}'"
+                )
+                
+                if result is None:  # 取消
+                    return
+                elif result:  # 是 - 保存当前预设
+                    self.save_preset()
+                    # 保存后立即重置修改标记，避免在切换预设时再次触发确认对话框
+                    self.is_modified = False
+                    self.log(f"已保存预设 '{self.current_preset}' 并切换到 '{preset_name}'")
+                else:  # 否 - 不保存修改
+                    self.log(f"已切换到预设 '{preset_name}'（未保存当前修改）")
+            
+            # 应用新预设的配置
+            self.ai_model = preset['ai_model']
+            self.temperature = preset['temperature']
+            self.system_prompt = preset['system_prompt']
+            self.provider_var.set(preset['provider'])
             self.current_preset = preset_name
-            preset_data = self.presets[preset_name]
-            
-            # 更新系统提示词
-            self.system_prompt = preset_data.get("system_prompt", "")
-            self.prompt_text.delete("1.0", tk.END)
-            self.prompt_text.insert("1.0", self.system_prompt)
-            
-            # 更新模型参数
-            self.ai_model = preset_data.get("ai_model", self.ai_model)
-            self.temperature = preset_data.get("temperature", self.temperature)
             
             # 更新UI
             self.model_combo.set(self.ai_model)
             self.temperature_scale.set(self.temperature)
             self.temperature_label.config(text=f"{self.temperature:.1f}")
+            self.prompt_text.delete("1.0", tk.END)
+            self.prompt_text.insert("1.0", self.system_prompt)
             
+            # 更新服务商选择
+            self.provider_combo.set(self.provider_var.get())
+            
+            # 手动更新模型选项，避免调用on_provider_change
+            selected_provider = self.provider_var.get()
+            if selected_provider in self.providers:
+                provider_config = self.providers[selected_provider]
+                self.model_combo['values'] = provider_config["model_options"]
+            
+            # 更新当前API密钥为对应服务商的密钥
+            # self.current_api_key = self.api_keys.get(selected_provider, "")
+            
+            # 更新UI显示
+            # self.api_key_entry.delete(0, tk.END)
+            # if self.current_api_key and self.current_api_key != "***已加密***":
+            #     self.api_key_entry.insert(0, "***已加密***")
+            # else:
+            #     self.api_key_entry.insert(0, self.current_api_key)
+            
+            # 重置修改标记
+            self.is_modified = False
+            
+            # 更新窗口标题和预设菜单
+            self.update_window_title()
             self.update_preset_menu()
-            self.log(f"已切换到预设: {preset_name}")
+            self.save_config()
 
     def export_presets(self):
         """导出预设集"""
@@ -1366,7 +1497,7 @@ class TranscriptionApp:
         """导入预设集"""
         file_path = filedialog.askopenfilename(
             title="导入预设集",
-            filetypes=[("JSON文件", "*.json")]
+            filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
         )
         
         if file_path:
@@ -1397,10 +1528,9 @@ class TranscriptionApp:
             except Exception as e:
                 messagebox.showerror("错误", f"导入失败: {str(e)}")
 
-    def update_window_title(self):
-        """更新窗口标题，在预设参数改变时显示*号"""
-        # 检查当前参数是否与保存的预设匹配
-        is_modified = False
+    def check_preset_if_modified(self):
+        """检查预设参数是否被修改"""
+        self.is_modified = False
         
         if self.current_preset in self.presets:
             preset_data = self.presets[self.current_preset]
@@ -1412,13 +1542,20 @@ class TranscriptionApp:
             if (current_prompt != preset_data.get("system_prompt", "") or
                 current_model != preset_data.get("ai_model", "") or
                 current_temperature != preset_data.get("temperature", 1.3)):
-                is_modified = True
+                self.is_modified = True
         
         # 更新窗口标题
-        if is_modified:
+        if self.is_modified:
             self.root.title(f"语音字幕生成器(预设:*{self.current_preset})")
         else:
             self.root.title(f"语音字幕生成器(预设:{self.current_preset})")
+
+    def update_window_title(self):
+        """更新窗口标题"""
+        if self.is_modified:
+            self.root.title(f"字幕翻译器(预设:*{self.current_preset})")
+        else:
+            self.root.title(f"字幕翻译器(预设:{self.current_preset})")
 
     def save_preset(self):
         """保存当前预设"""
@@ -1435,24 +1572,39 @@ class TranscriptionApp:
         self.presets[self.current_preset] = {
             "system_prompt": current_prompt,
             "ai_model": current_model,
-            "temperature": current_temperature
+            "temperature": current_temperature,
+            'provider': self.provider_var.get()
         }
         
         # 更新当前实例的配置
         self.system_prompt = current_prompt
         self.ai_model = current_model
         self.temperature = current_temperature
-        
+
+        # 重置修改标记
+        self.is_modified = False
+
         # 保存到config文件
         self.save_config()
         
         # 更新预设组合框
         self.update_preset_menu()
-        
+        self.root.title(f"字幕翻译器(预设:{self.current_preset})")
         self.log(f"已保存预设: {self.current_preset}")
 
-# 主程序入口
-if __name__ == "__main__":
+
+
+
+# # 主程序入口
+# if __name__ == "__main__":
+#     root = tk.Tk()
+#     app = TranscriptionApp(root)
+#     root.mainloop()
+def main():
+    """主程序入口"""
     root = tk.Tk()
     app = TranscriptionApp(root)
     root.mainloop()
+
+if __name__ == "__main__":
+    main()
