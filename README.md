@@ -9,10 +9,12 @@
 - 400行为一块丢给AI翻译纯粹是经验数值，不喜欢可以修改
 - 在主界面可以选择是否使用AI翻译，关于AI提供商只写了DeepSeek，想用其他家的请自己修改源代码添加
 - API秘钥本地加密存储
-- 可以保留提示词，不同节目类型的提示词预设卡片考虑开发中  
+- 可以保留提示词，不同节目类型的提示词预设卡片考虑开发中
+  
+## 20251004更新
+- 为无法本地运行whisper的朋友做了一个只有翻译功能的版本
+- 现在已支持DeepSeek，OpenAI，Gemini的调用支持（后期会考虑增加自定义API url接入能力） 
 <img width="2360" height="1398" alt="QQ20250930-174524" src="https://github.com/user-attachments/assets/baa7fdf2-bd81-4cee-86cf-343a228dacf7" />
 
 <img width="2360" height="1398" alt="QQ20250930-174512" src="https://github.com/user-attachments/assets/e720ad0d-c70f-4336-8591-dc58c26b305e" />
-## 20251004更新
-- 为无法本地运行whisper的朋友做了一个只有翻译功能的版本
-- 现在已支持DeepSeek，OpenAI，Gemini的调用支持（后期会考虑增加自定义API url接入能力）
+
