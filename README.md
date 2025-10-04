@@ -1,4 +1,4 @@
-# whisperguikino
+# transby2
 只是一个对个人顺手的工作流程自动化的小GUI软件，建议已经实现本地N卡跑[faster-whisper](https://github.com/SYSTRAN/faster-whisper)的朋友使用，如果搞不定请勿自我折磨。  
 同时参考了一部分[N46Whisper](https://github.com/Ayanaminn/N46Whisper/)的代码，非常感谢聚聚的贡献。  
 [whisper模型下载](https://github.com/openai/whisper/blob/main/whisper/__init__.py)请自行解决。  
