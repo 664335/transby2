@@ -20,8 +20,10 @@
 - 使用funtion calling确保模型结构化输出，保证程序工作稳定性
 - 使用苹方字体提升UI美观度
 
-<img width="1922" height="1128" alt="image" src="https://github.com/user-attachments/assets/f2169e4c-9854-4d7e-aa3c-9950591debfc" />
+<img width="1204" height="947" alt="image" src="https://github.com/user-attachments/assets/7fe0d00d-0158-40aa-9d82-1836b439fcca" />
 
-<img width="1907" height="1109" alt="d17b8e6c-62f9-40f0-a261-249c33b0e80c" src="https://github.com/user-attachments/assets/6ef8a3f3-d8e1-4796-ae6c-fb480a1a935e" />
+
+<img width="1204" height="947" alt="image" src="https://github.com/user-attachments/assets/5db22b40-dcbf-4789-ad23-a3aa2d739298" />
+
 
 
