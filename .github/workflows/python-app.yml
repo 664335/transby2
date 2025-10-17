@@ -1,0 +1,34 @@
+name: Build macOS App
+on: [workflow_dispatch]
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller
+          pip install requests openai
+          # 如果你有 requirements.txt，可以改成：
+          # pip install -r requirements.txt
+
+      - name: Build macOS GUI App
+        run: |
+          pyinstaller --onefile --windowed transonly_V0.2.py \
+            --name "transonly_V0.2" \
+            --icon "app.icns" || true
+
+      - name: Upload macOS App
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-App
+          path: dist/transonly_V0.2.app
