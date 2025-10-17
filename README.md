@@ -18,6 +18,7 @@
 ## 20251017更新  
 - 增加VAD开关按钮
 - 使用funtion calling确保模型结构化输出，保证程序工作稳定性
+- 使用苹方字体提升UI美观度
 
 <img width="1922" height="1128" alt="image" src="https://github.com/user-attachments/assets/f2169e4c-9854-4d7e-aa3c-9950591debfc" />
 
