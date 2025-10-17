@@ -1,4 +1,4 @@
-name: Build macOS App
+name: Build macOS GUI App
 on: [workflow_dispatch]
 
 jobs:
@@ -18,13 +18,12 @@ jobs:
 
       - name: Build macOS GUI App
         run: |
-          pyinstaller --onefile --windowed transonly_V0.2.py \
-            --name "TransBy" \
-            --icon "app.icns" || true
-          ls -R dist || true
+          pyinstaller --windowed transonly_V0.2.py --name "TransBy" --icon "app.icns" || true
+          echo "---- dist directory ----"
+          ls -lah dist || true
 
-      - name: Upload macOS App
+      - name: Upload macOS Build
         uses: actions/upload-artifact@v4
         with:
-          name: macOS-App
-          path: dist/**/*.app
+          name: macOS-Build
+          path: dist/
