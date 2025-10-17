@@ -1,29 +1,47 @@
 name: Build macOS GUI App
-on: [workflow_dispatch]
+
+on:
+  workflow_dispatch:
 
 jobs:
-  build-macos:
+  build:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          pip install pyinstaller requests openai
+          python -m pip install --upgrade pip
+          pip install pyinstaller openai requests
 
-      - name: Build macOS GUI App
+      - name: Build macOS .app
         run: |
-          pyinstaller --windowed transonly_V0.2.py --name "TransBy" --icon "app.icns" || true
-          echo "---- dist directory ----"
-          ls -lah dist || true
+          pyinstaller --onefile --windowed --name "TransBy2" transonly_V0.2.py
+          echo "--- dist directory ---"
+          ls -R dist || true
 
-      - name: Upload macOS Build
+      - name: Package as ZIP
+        run: |
+          cd dist
+          if [ -d "TransBy2.app" ]; then
+            zip -r TransBy2-macOS.zip TransBy2.app
+          elif [ -f "TransBy2" ]; then
+            zip -r TransBy2-macOS.zip TransBy2
+          else
+            echo "❌ No build output found in dist/"
+            exit 1
+          fi
+          ls -lh
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macOS-Build
-          path: dist/
+          name: TransBy2-macOS
+          path: dist/TransBy2-macOS.zip
