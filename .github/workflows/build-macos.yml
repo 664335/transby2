@@ -1,4 +1,4 @@
-name: Build macOS GUI App (.app)
+name: Build and Sign macOS GUI App (.app)
 
 on:
   workflow_dispatch:
@@ -21,8 +21,8 @@ jobs:
         run: |
           pip install pyinstaller requests openai
 
-      # 4️⃣ 打包为 GUI 应用
-      - name: Build macOS app
+      # 4️⃣ 构建 GUI 应用
+      - name: Build TransBy.app
         run: |
           echo "开始构建 TransBy.app ..."
           pyinstaller --noconfirm \
@@ -32,17 +32,13 @@ jobs:
                       --icon "app.icns" \
                       transonly_V0.2.py
 
-          # ✅ 创建 .app bundle 结构
           mkdir -p "dist/TransBy.app/Contents/MacOS"
           mkdir -p "dist/TransBy.app/Contents/Resources"
 
-          # ✅ 拷贝可执行内容
           cp -R dist/TransBy/* dist/TransBy.app/Contents/MacOS/
-
-          # ✅ 拷贝图标
           cp app.icns dist/TransBy.app/Contents/Resources/ || true
 
-          # ✅ 生成 Info.plist
+          # ✅ 创建 Info.plist
           cat > dist/TransBy.app/Contents/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -67,13 +63,38 @@ jobs:
           </plist>
           EOF
 
-          # ✅ 压缩成 zip
+      # 5️⃣ 使用自签名证书为 .app 签名
+      - name: Create and apply local code signing certificate
+        run: |
+          echo "🪪 创建自签名证书..."
+          CERT_NAME="TransByLocalSigner"
+          KEYCHAIN=build.keychain
+          security create-keychain -p "" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+
+          # 创建自签名证书
+          CERT_PATH=TransByLocalSigner.cer
+          openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 \
+            -subj "/CN=$CERT_NAME" -keyout signer.key -out signer.crt
+          security import signer.crt -k "$KEYCHAIN" -T /usr/bin/codesign
+          security import signer.key -k "$KEYCHAIN" -T /usr/bin/codesign
+
+          echo "✅ 使用自签名证书签名 .app"
+          codesign --force --deep --options runtime --sign "$CERT_NAME" dist/TransBy.app || exit 1
+
+          echo "🔍 验证签名..."
+          codesign --verify --deep --strict --verbose=2 dist/TransBy.app
+
+      # 6️⃣ 打包为 ZIP 并上传
+      - name: Compress and upload
+        run: |
           cd dist
           zip -r TransBy-macOS.zip TransBy.app
 
-      # 5️⃣ 上传构建产物
       - name: Upload macOS App
         uses: actions/upload-artifact@v4
         with:
-          name: TransBy-macOS-App
+          name: TransBy-macOS-Signed
           path: dist/TransBy-macOS.zip
