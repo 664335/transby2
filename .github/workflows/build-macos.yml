@@ -49,7 +49,7 @@ jobs:
       # transonly_V0.2.py: 你的主 Python 脚本文件
       - name: Build macOS App with PyInstaller
         run: |
-          pyinstaller --name="TransBy2" --windowed --onefile transonly_V0.2.py
+          pyinstaller --name="Transonly" --windowed --onefile --icon="app.icns" transonly_V0.2.py
 
       # 第 5 步：上传打包好的 .app 文件作为产物
       # 这个步骤会把 dist 文件夹下生成的 TransBy2.app 文件上传，以便你下载
