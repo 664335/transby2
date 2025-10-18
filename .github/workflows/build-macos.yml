@@ -1,4 +1,4 @@
-name: Build macOS .app
+name: Build macOS GUI App (.app)
 
 on:
   workflow_dispatch:
@@ -6,40 +6,74 @@ on:
 jobs:
   build-macos:
     runs-on: macos-latest
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      # 1️⃣ 拉取源码
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      # 2️⃣ 安装 Python 环境
+      - uses: actions/setup-python@v5
         with:
-          python-version: 3.11
+          python-version: '3.10'
 
+      # 3️⃣ 安装依赖
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install pyinstaller requests openai
 
-      - name: Create default icon if missing
-        run: |
-          if [ ! -f "app.icns" ]; then
-            echo "No app.icns found, generating a simple placeholder..."
-            mkdir -p icon.iconset
-            sips -z 512 512 /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns --out icon.iconset/icon_512x512.png
-            iconutil -c icns icon.iconset -o app.icns
-          fi
-
+      # 4️⃣ 打包为 GUI 应用
       - name: Build macOS app
         run: |
+          echo "开始构建 TransBy.app ..."
           pyinstaller --noconfirm \
                       --windowed \
                       --onedir \
                       --name "TransBy" \
-                      --icon app.icns \
+                      --icon "app.icns" \
                       transonly_V0.2.py
 
-      - name: Upload .app bundle
+          # ✅ 创建 .app bundle 结构
+          mkdir -p "dist/TransBy.app/Contents/MacOS"
+          mkdir -p "dist/TransBy.app/Contents/Resources"
+
+          # ✅ 拷贝可执行内容
+          cp -R dist/TransBy/* dist/TransBy.app/Contents/MacOS/
+
+          # ✅ 拷贝图标
+          cp app.icns dist/TransBy.app/Contents/Resources/ || true
+
+          # ✅ 生成 Info.plist
+          cat > dist/TransBy.app/Contents/Info.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+                  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key>
+              <string>TransBy</string>
+              <key>CFBundleDisplayName</key>
+              <string>TransBy</string>
+              <key>CFBundleExecutable</key>
+              <string>TransBy</string>
+              <key>CFBundleIconFile</key>
+              <string>app.icns</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.transby.app</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.15</string>
+          </dict>
+          </plist>
+          EOF
+
+          # ✅ 压缩成 zip
+          cd dist
+          zip -r TransBy-macOS.zip TransBy.app
+
+      # 5️⃣ 上传构建产物
+      - name: Upload macOS App
         uses: actions/upload-artifact@v4
         with:
-          name: TransBy-macOS-app
-          path: dist/TransBy.app
+          name: TransBy-macOS-App
+          path: dist/TransBy-macOS.zip
