@@ -1,56 +1,74 @@
-name: Build macOS GUI App
+# .github/workflows/build-macos.yml
 
-on: [workflow_dispatch]
+name: Build macOS App
+
+# 触发工作流的条件
+on:
+  # 1. 允许你手动在 GitHub Actions 页面点击 "Run workflow" 来运行
+  workflow_dispatch:
+
+  # 2. 当你创建一个新的 "Release" 时自动运行
+  release:
+    types: [published]
 
 jobs:
   build-macos:
+    # 运行在最新的 macOS 虚拟机上
     runs-on: macos-latest
 
     steps:
-      - name: Checkout repo
+      # 步骤 1: 签出 (checkout) 你的代码
+      - name: Checkout code
         uses: actions/checkout@v4
 
+      # 步骤 2: 设置 Python 环境
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          # 注意：请修改为你开发时使用的 Python 版本 (例如 '3.10', '3.11' 等)
+          python-version: '3.9' 
 
+      # 步骤 3: 安装依赖
       - name: Install dependencies
         run: |
-          pip install pyinstaller requests openai
+          python -m pip install --upgrade pip
+          # 安装打包工具
+          pip install pyinstaller
+          
+          # -- 根据你的 import 列表，在虚拟机中动态创建 requirements.txt --
+          echo "requests" > requirements.txt
+          echo "openai" >> requirements.txt
+          # ---------------------------------------------------------
+          
+          # 从 requirements.txt 安装依赖
+          pip install -r requirements.txt
 
-      - name: Build macOS GUI App (.app)
+      # 步骤 4: 使用 PyInstaller 打包
+      - name: Build the .app
         run: |
-          # 建立临时构建环境
-          mkdir -p build dist
-
-          # 打包 GUI App（不使用 --onefile）
+          # --name: 你的应用名称
+          # --windowed: 关键！无控制台窗口的GUI应用
+          # --icon: 你在根目录的图标文件
+          # --add-data: 关键！确保你的 crypto_utils.py 本地模块被包含
+          # transonly_V0.2.py: 你的主程序文件
           pyinstaller \
+            --name="transonly" \
             --windowed \
-            --onedir \
-            --name "TransBy" \
-            --icon "app.icns" \
+            --icon="app.icns" \
+            --add-data="crypto_utils.py:." \
             transonly_V0.2.py
 
-          echo "✅ Build complete. Contents of dist:"
-          ls -R dist
-
-      - name: Sign the app (for Gatekeeper compatibility)
+      # 步骤 5: 将 .app 打包为 .zip
+      # .app 实际上是一个文件夹，必须压缩后才能作为 artifact 上传
+      - name: Package the .app into a .zip
         run: |
-          # 对生成的 app 进行签名
-          codesign --force --deep --sign - "dist/TransBy.app" || true
+          # pyinstaller 会把 .app 输出到 dist/ 目录下
+          zip -r TransBy2-macOS.zip dist/transonly.app
 
-          # 重新验证签名
-          spctl --assess --type execute "dist/TransBy.app" || true
-
-      - name: Compress .app
-        run: |
-          cd dist
-          zip -r TransBy_macOS.zip TransBy.app
-          cd ..
-
-      - name: Upload Build Artifact
+      # 步骤 6: 上传构建好的 .zip 文件
+      # 你可以在 Action 运行结束后下载它
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macOS-App
-          path: dist/TransBy_macOS.zip
+          name: transonly-macOS-App
+          path: transonly-macOS.zip
