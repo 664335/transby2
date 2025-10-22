@@ -27,7 +27,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.9'
 
       # 第 3 步：安装 PyInstaller
       # PyInstaller 是将 Python 脚本打包成可执行文件的核心工具
