@@ -63,7 +63,7 @@ jobs:
       - name: Package the .app into a .zip
         run: |
           # pyinstaller 会把 .app 输出到 dist/ 目录下
-          zip -r TransBy2-macOS.zip dist/transonly.app
+          zip -r transonly-macOS.zip dist/transonly.app
 
       # 步骤 6: 上传构建好的 .zip 文件
       # 你可以在 Action 运行结束后下载它
