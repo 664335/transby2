@@ -14,7 +14,7 @@ on:
 jobs:
   build-macos:
     # 运行在最新的 macOS 虚拟机上
-    runs-on: macos-latest
+    runs-on: macos-13
 
     steps:
       # 步骤 1: 签出 (checkout) 你的代码
