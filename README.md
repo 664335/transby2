@@ -1,5 +1,5 @@
 # Transby2
-只是一个对个人顺手的工作流程自动化的小GUI软件，其得名为软件实现的两个核心功能，即转写(transcript)和翻译(translation)，两个单词皆为trans开头于是这个软件就被命名为Transby2了。  
+只是一个对个人顺手的工作流程自动化的小GUI软件，其得名为软件实现的两个核心功能，即转写(transcript)和翻译(translate)，两个单词皆为trans开头于是这个软件就被命名为Transby2了。  
 建议已经实现本地N卡跑[faster-whisper](https://github.com/SYSTRAN/faster-whisper)的朋友使用，如果搞不定请勿自我折磨。  
 同时参考了一部分[N46Whisper](https://github.com/Ayanaminn/N46Whisper/)的代码，非常感谢聚聚的贡献。   
 程序能够输出带时间轴的熟肉字幕，之后人肉校对和微调时间轴即可完成字幕工作。程序的字幕翻译方式和提示词绑定很深，如果不会使用请联系作者，请勿自行盲目尝试。  
