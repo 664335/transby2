@@ -23,5 +23,13 @@
 
 <img width="1204" height="947" alt="image" src="https://github.com/user-attachments/assets/5db22b40-dcbf-4789-ad23-a3aa2d739298" />
 
+## 20251110更新  
+- 应monad哥哥的意见增加时间段总结功能，利用AI对字幕内容进行总结
+- 由于funtion calling方式会导致解析不稳定，最后还是改为json output方式实现稳定字幕解析与时间轴重建
+- 图标设置为为重型猎鹰火箭与月球重合照片
+
+<img width="1186" height="1640" alt="image" src="https://github.com/user-attachments/assets/7d0f295c-91b0-47c3-89da-296fa1e6515c" />
+
+
 
 
