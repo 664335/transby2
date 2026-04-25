@@ -65,7 +65,6 @@ import uuid
 from faster_whisper import WhisperModel
 from qwen_asr import Qwen3ASRModel
 from datetime import datetime
-from tqdm import tqdm
 import ffmpeg
 import json
 import yt_dlp
@@ -105,14 +104,8 @@ class TranscriptionApp:
         self.ffmpeg_exe_path = get_executable_path('ffmpeg.exe')
         self.yt_dlp_exe_path = get_executable_path('yt-dlp.exe')
 
-        #markdown相关参数
-        self.enable_markdown_preview = tk.BooleanVar(value=True) # 默认启用Markdown预览
-        self.markdown_html_frame = None
-        self.markdown_splitter = None
-
         # 文件路径变量
         self.input_file = tk.StringVar()
-        self.output_dir = tk.StringVar()
         self.subtitle_file_var = tk.StringVar()
         self.audit_subtitle_file_var = tk.StringVar()
         self.looping_image_var = tk.StringVar()
@@ -124,22 +117,21 @@ class TranscriptionApp:
         self.ASR_model_choice = "Faster Whisper"  # 默认选择Faster Whisper
         self.language = "日语"
         self.is_vad_filter = tk.BooleanVar(value=True)
-        self.set_beam_size = 5
 
         # 预设管理
         self.presets = {
             "Default": {
                 "system_prompt": "你是一个专业的翻译助手，请将以下日文字幕翻译成中文，保持原有的格式和结构。",
-                "ai_model": "deepseek-chat",
-                "temperature": 1.3,
+                "ai_model": "deepseek-v4-flash",
+                "temperature": 0.3,
                 "provider": "DeepSeek",
-                "batch_size": 80
+                "batch_size": 200,
+                "hotword": " "
             }
         }
         self.current_preset = "Default"
 
         self.preset_menu = None
-        self.preset_combo = None
         self.is_modified = False  # 参数修改标记
 
         # 模型路径变量
@@ -155,11 +147,11 @@ class TranscriptionApp:
         self.enable_log_output = tk.BooleanVar(value=False)
         self.enable_history_messages = tk.BooleanVar(value=False)
         self.api_keys = {}  # 存储不同服务商的API密钥
-        self.current_api_key = ""  # 当前服务商的API密钥
         self.system_prompt = self.presets[self.current_preset]["system_prompt"]
         self.ai_model = self.presets[self.current_preset]["ai_model"]
         self.temperature = self.presets[self.current_preset]["temperature"]
         self.batch_size = self.presets[self.current_preset]["batch_size"]  # 每批次字幕行数
+        self.hotword = self.presets[self.current_preset]["hotword"]
         self.decrypted_api_key = {} #解密后的秘钥缓存
 
         self.fixed_resolution = tk.BooleanVar(value=False)
@@ -171,7 +163,7 @@ class TranscriptionApp:
         self.providers = {
             "DeepSeek": {
                 "api_url": "https://api.deepseek.com",
-                "model_options": ["deepseek-chat", "deepseek-reasoner"],
+                "model_options": ["deepseek-v4-flash"],
                 "is_available_url": "https://api.deepseek.com/user/balance"
             },
             "Gemini": {
@@ -425,6 +417,13 @@ class TranscriptionApp:
         ttk.Button(preset_and_subtitle_frame, text="提交字幕", command=self.submit_subtitle).grid(row=1, column=2, padx=5)
         ttk.Button(preset_and_subtitle_frame, text="开始翻译", command=self.start_translation).grid(row=1, column=3, padx=5)
 
+        # 热词显示框，加强专有名词听写表现
+        ttk.Label(preset_and_subtitle_frame, text="专有词汇", font=("苹方 中等", 10)).grid(row=2, column=0, padx=5, sticky="w")
+        self.hotword_entry = ttk.Entry(preset_and_subtitle_frame, textvariable=self.hotword, width=40, font=("苹方 中等", 10))
+        self.hotword_entry.insert(0, str(self.hotword))
+        self.hotword_entry.grid(row=2, column=1, padx=5, sticky="w")
+        self.hotword_entry.bind("<KeyRelease>", lambda e: self.check_preset_if_modified()) # 绑定事件以检查修改        
+  
         # 字幕文件路径显示
         ttk.Label(preset_and_subtitle_frame, textvariable=self.subtitle_file_var, width=120, font=("苹方 中等", 10)).grid(row=1, column=4, padx=5, sticky="w")
 
@@ -564,10 +563,10 @@ class TranscriptionApp:
         timeline_audit_frame = ttk.LabelFrame(self.common_tools_frame, text="字幕后处理工具")
         timeline_audit_frame.pack(pady=10, padx=10, fill="x")
 
-        #导入字幕文件
-        ttk.Button(timeline_audit_frame, text="导入字幕文件", command=self.audit_summit_subtitle_file).grid(row=0, column=0, padx=5, sticky="w")
+        #选择字幕文件
+        ttk.Button(timeline_audit_frame, text="选择字幕文件", command=self.audit_summit_subtitle_file).grid(row=0, column=0, padx=5, sticky="w")
         ttk.Button(timeline_audit_frame, text="开始锤轴", command=self.audit_subtitle).grid(row=0, column=1, padx=5, sticky="w")
-        ttk.Button(timeline_audit_frame, text="生成水印", command=self.generate_watermark).grid(row=0, column=2, padx=5, sticky="w")
+        ttk.Button(timeline_audit_frame, text="添加水印", command=self.generate_watermark).grid(row=0, column=2, padx=5, sticky="w")
         ttk.Label(timeline_audit_frame, text="水印文本:", font=("苹方 中等", 10)).grid(row=0, column=3, padx=15, sticky="w")
         self.watermark_entry = ttk.Entry(timeline_audit_frame, width=30, font=("苹方 中等", 10))
         self.watermark_entry.grid(row=0, column=4, padx=5, sticky="w")
@@ -575,14 +574,13 @@ class TranscriptionApp:
         #一图流
         looping_frame = ttk.LabelFrame(self.common_tools_frame, text="一图流视频")
         looping_frame.pack(pady=10, padx=10, fill="x")
-        ttk.Button(looping_frame, text="导入图片", command=self.import_looping_image).grid(row=0, column=0, padx=5, sticky="w")
-        ttk.Button(looping_frame, text="导入音频", command=self.import_looping_audio).grid(row=0, column=1, padx=5, sticky="w")
+        ttk.Button(looping_frame, text="选择图片", command=self.import_looping_image).grid(row=0, column=0, padx=5, sticky="w")
+        ttk.Button(looping_frame, text="选择音频", command=self.import_looping_audio).grid(row=0, column=1, padx=5, sticky="w")    
+        ttk.Button(looping_frame, text="开始生成", command=self.generate_looping_video).grid(row=0, column=2, padx=5, sticky="w")
         ttk.Checkbutton(looping_frame, text="1080P生成", variable=self.fixed_resolution,
-                       command=self.on_fixed_resolution_toggle).grid(row=0, column=2, padx=5, sticky="w")
+                       command=self.on_fixed_resolution_toggle).grid(row=1, column=0, padx=5, sticky="w")
         ttk.Checkbutton(looping_frame, text="跟随图片分辨率", variable=self.pic_resolution,
-                       command=self.on_pic_resolution_toggle).grid(row=0, column=3, padx=5, sticky="w")        
-        ttk.Button(looping_frame, text="生成视频", command=self.generate_looping_video).grid(row=0, column=4, padx=5, sticky="w")
-
+                       command=self.on_pic_resolution_toggle).grid(row=1, column=1, padx=5, sticky="w")    
  
         # 常用工具日志框
         log_frame = ttk.LabelFrame(self.common_tools_frame, text="常用工具日志")
@@ -600,10 +598,7 @@ class TranscriptionApp:
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
         self.status_label = ttk.Label(self.status_bar, text="就绪", relief=tk.SUNKEN, anchor=tk.W, font=("苹方 中等", 12))
-        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        self.progress_label = ttk.Label(self.status_bar, text="", relief=tk.SUNKEN, anchor=tk.E, width=20, font=("苹方 中等", 12))
-        self.progress_label.pack(side=tk.RIGHT)
+        self.status_label.pack(fill=tk.X, expand=True)
 
     #一图流功能部分
     def import_looping_image(self):
@@ -615,7 +610,6 @@ class TranscriptionApp:
         if file_path:
             normalized_path = file_path.replace('/', '\\')
             self.looping_image_var.set(normalized_path)
-
             self.log_download(f"已选择图片文件: {normalized_path}")
 
     def import_looping_audio(self):
@@ -626,8 +620,7 @@ class TranscriptionApp:
 
         if file_path:
             normalized_path = file_path.replace('/', '\\')
-            self.looping_audio_var.set(normalized_path)
-
+            self.looping_audio_var.set(normalized_path)                        
             self.log_download(f"已选择音频文件: {normalized_path}")
 
     def generate_looping_video(self):
@@ -656,6 +649,7 @@ class TranscriptionApp:
                 if not output_path:
                     self.log_download("已取消保存视频文件")
                     return
+
 
                 input_video = ffmpeg.input(image_path, loop=1)
                 input_audio = ffmpeg.input(audio_path)
@@ -688,6 +682,7 @@ class TranscriptionApp:
                     .overwrite_output()
                     .compile(cmd=self.ffmpeg_exe_path)
                 )
+                self.update_status_bar("正在生成视频")
 
                 # 启动ffmpeg进程
                 process = subprocess.Popen(
@@ -703,14 +698,14 @@ class TranscriptionApp:
                 def update_progress():
                     last_update_time = 0
                     progress_pattern = re.compile(r'time=(\d{2}):(\d{2}):(\d{2}\.\d{2})')
-                    spped_pattern = re.compile(r'speed=\s*([\d.]+)x')
+                    speed_pattern = re.compile(r'speed=\s*([\d.]+)x')
 
                     while True:
                         line = process.stderr.readline()
                         if not line and process.poll() is not None:
                             break
 
-                        speed_match = spped_pattern.search(line)
+                        speed_match = speed_pattern.search(line)
                         if speed_match:
                             speed = float(speed_match.group(1))
 
@@ -732,8 +727,11 @@ class TranscriptionApp:
                                 bar = '[' + '=' * filled_length + '>' + '  ' * (bar_length - filled_length - 1) + ']'
                                 remaining = audio_duration - current_time
                                 eta = int(remaining / speed) if remaining > 0 else 0
+                                eta_minute = int(eta // 60)
+                                eta_second = eta % 60
+
                                 # 更新进度条（在同一行更新）
-                                self.update_progress_bar(f"生成进度: {bar} {progress_percent}% 剩余时间: {eta}s\r")
+                                self.update_progress_bar(f"生成进度: {bar} {progress_percent}% 剩余时间: {eta_minute}分{eta_second}秒\r")
                                 last_update_time = current_time_ms
 
                 # 启动进度更新线程
@@ -744,6 +742,7 @@ class TranscriptionApp:
                 process.wait()
 
                 # 显示完成消息（在新的一行显示）
+                self.update_status_bar("视频生成完成")
                 normalized_output_path = output_path.replace('/', '\\')
                 self.log_download(f"\n视频生成完成，已保存至: {normalized_output_path}")
             except Exception as e:
@@ -1153,8 +1152,9 @@ class TranscriptionApp:
         if not self.subtitle_file_var.get():
             messagebox.showerror("错误", "请先提交字幕文件")
             return
-
-        if not self.current_api_key:
+        
+        current_provider = self.provider_var.get() 
+        if not self.api_keys[current_provider]:
             messagebox.showerror("错误", "请先设置API密钥")
             return
 
@@ -1164,6 +1164,7 @@ class TranscriptionApp:
             return
 
         self.save_preset()
+        
         # 启动后台线程
         if success:
             threading.Thread(target=self.run_parallel_batch_translation, daemon=True).start()
@@ -1178,15 +1179,15 @@ class TranscriptionApp:
             subtitle_file = self.subtitle_file_var.get()
             with open(subtitle_file, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-            # 找到第一个 Dialogue 行出现的位置
-            first_dialogue_index = -1
-            # 1. 遍历列表，找到第一个Dialogue行的索引
+
+            # 找到第一个Dialogue行的索引
+            first_dialogue_index = -1            
             for i, line in enumerate(lines):
                 if line.strip().startswith('Dialogue:'):
                     first_dialogue_index = i
                     break
 
-            # 2. 根据索引分割列表
+            # 根据索引分割列表
             if first_dialogue_index == -1:
                 # 文件中没有Dialogue行，整个文件都是头部
                 dialogue_lines = []
@@ -1241,7 +1242,7 @@ class TranscriptionApp:
 
             # 处理所有成功的结果
             all_processed_lines = []
-            all_translation_lines = []
+            all_translation_log = []
 
             # 按批次顺序处理结果
             successful_batch_ids = list(successful_results.keys())
@@ -1254,11 +1255,11 @@ class TranscriptionApp:
                 translated_batch = successful_results[batch_id]['translated_batch']
 
                 # 重建ASS字幕行
-                current_batch_lines, translation_line = self.reconstruct_ass_from_response(translated_batch, context)
+                current_batch_lines, translation_log = self.reconstruct_ass_from_response(translated_batch, context)
 
                 # 检查解析是否成功
                 if current_batch_lines is None:
-                    self.log(f"第 {batch_num + 1} 批次JSON解析失败，跳过此批次")
+                    self.log(f"第{(batch_num *batch_size)+1}行到{(batch_num + 1)*batch_size} 行JSON解析失败，请手动重试")
                     continue
 
                 # 处理翻译结果
@@ -1284,7 +1285,7 @@ class TranscriptionApp:
                             processed_lines.append(line)
 
                 all_processed_lines.extend(processed_lines)
-                all_translation_lines.extend(translation_line)
+                all_translation_log.extend(translation_log)
 
             # 将所有处理后的行写入输出文件
             with open(output_file_readytogo, 'a', encoding='utf-8') as f:
@@ -1293,7 +1294,7 @@ class TranscriptionApp:
 
             if self.enable_log_output.get():
                 with open(output_file_translation_log, 'a', encoding='utf-8') as f:
-                    f.write('\n'.join(all_translation_lines))
+                    f.write('\n'.join(all_translation_log))
                     f.write('\n')  # 添加换行分隔不同批次
 
             # 统计失败的批次
@@ -1314,37 +1315,32 @@ class TranscriptionApp:
 
         except Exception as e:
             self.log(f"翻译失败: {str(e)}")
-
             self.log(f"错误详情: {traceback.format_exc()}")
 
     def call_ai_translation_api_parallel(self, batch_texts, batch_contexts):
-        """并行调用AI翻译API，一次性发送所有批次的请求"""
+        """并行调用AI翻译API，支持逐次重试机制"""
 
         max_workers = 32  # 最大并发数
         max_retries = 3  # 最大重试次数
-        retry_delay = 5  # 秒
 
         # 获取当前服务商配置
         selected_provider = self.provider_var.get()
         provider_config = self.providers.get(selected_provider, self.providers["DeepSeek"])
         api_url = provider_config["api_url"]
         ai_model = self.ai_model
-
-        # 创建线程池
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        api_key = self.decrypted_api_key[self.provider_var.get()]
 
         # 创建锁用于线程安全
         lock = threading.Lock()
 
         # 存储结果
         results = {}
-        failed_batches = []
 
         # 定义单个批次的翻译函数
         def translate_single_batch(batch_id, batch_text, context, retry_count=0):
             """翻译单个批次的函数"""
             try:
-                client = OpenAI(api_key=self.current_api_key, base_url=api_url)
+                client = OpenAI(api_key=api_key, base_url=api_url)
 
                 # 构建消息
                 if self.conversation_history:
@@ -1381,10 +1377,11 @@ class TranscriptionApp:
                 else:
                     response = client.chat.completions.create(
                         model=ai_model,
-                        messages=messages,
-                        max_tokens=8192,
+                        messages=messages,  
+                        max_tokens=393216,                      
                         temperature=self.temperature,
                         response_format={"type": "json_object"},
+                        extra_body={"thinking": {"type": "disabled"}},
                         stream=False
                     )
 
@@ -1432,37 +1429,45 @@ class TranscriptionApp:
                     }
                 return batch_id, False, None, 0
 
-        # 提交所有翻译任务
-        future_to_batch_id = {}
+        # 首次提交所有翻译任务
+        # self.log("首次提交所有翻译批次...")
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         for batch_id, batch_text in batch_texts.items():
             # 控制发送速率：每秒一个请求
             time.sleep(1)
             # 获取对应的 context
             context = batch_contexts.get(batch_id, {}).get('context') if batch_contexts else None
-            future = executor.submit(translate_single_batch, batch_id, batch_text, context)
-            future_to_batch_id[future] = batch_id
-
-        # 等待所有任务完成
+            executor.submit(translate_single_batch, batch_id, batch_text, context)
         executor.shutdown(wait=True)
 
-        # 处理失败的批次（重试）
-        for batch_id, result in list(results.items()):
-            if not result['success'] and result.get('retry_count', 0) < max_retries:
-                failed_batches.append((batch_id, batch_texts[batch_id], result.get('retry_count', 0) + 1))
+        # 逐次重试：最多重试 max_retries 次
+        for retry_round in range(1, max_retries + 1):
+            # 筛选出需要重试的批次
+            failed_batches = []
+            for batch_id, result in list(results.items()):
+                if not result['success'] and result.get('retry_count', 0) < retry_round:
+                    failed_batches.append((batch_id, batch_texts[batch_id], retry_round))
 
-        # 重试失败的批次
-        if failed_batches:
-            self.log(f"开始重试 {len(failed_batches)} 个失败的批次")
+            if not failed_batches:
+                # 没有失败的批次，提前退出重试循环
+                break
+
+            self.log(f"第 {retry_round} 次重试：开始重试 {len(failed_batches)} 个失败的批次")
             retry_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-
             for batch_id, batch_text, retry_count in failed_batches:
                 time.sleep(1)  # 控制重试发送速率
                 # 获取对应的 context
                 context = batch_contexts.get(batch_id, {}).get('context') if batch_contexts else None
-                future = retry_executor.submit(translate_single_batch, batch_id, batch_text, context, retry_count)
-                future_to_batch_id[future] = batch_id
-
+                retry_executor.submit(translate_single_batch, batch_id, batch_text, context, retry_count)
             retry_executor.shutdown(wait=True)
+
+            # 检查重试后是否还有失败的批次
+            still_failed = sum(1 for r in results.values() if not r['success'])
+            if still_failed == 0:
+                self.log("所有批次翻译成功")
+                break
+            else:
+                self.log(f"第 {retry_round} 次重试后，仍有 {still_failed} 个批次失败")
 
         # 收集最终结果
         successful_results = {}
@@ -1523,8 +1528,7 @@ class TranscriptionApp:
             try:
                 parsed_response = json.loads(api_response)
             except json.JSONDecodeError as e:
-                print(f"JSON解析错误: {e}")
-
+                self.log(f"JSON解析错误: {e}")
                 self.log(f"原始响应: {api_response}")
                 return None, None # 返回 None, None 表示解析失败
         else:
@@ -1538,6 +1542,8 @@ class TranscriptionApp:
             print("API响应中缺少translatedSentences字段")
             print(f"响应内容: {parsed_response}")
             return None, None # 返回 None, None 表示解析失败
+
+        last_end_time = self.ass_time_to_seconds(f"0:00:00.00")
 
         for sentence_obj in parsed_response['translatedSentences']:
             translated_text = sentence_obj['sentence']
@@ -1565,11 +1571,15 @@ class TranscriptionApp:
             )
             new_dialogue_lines.append(new_line)
 
+            if self.ass_time_to_seconds(start_time) < self.ass_time_to_seconds(last_end_time):
+                tranlation_log.append(f"error:{last_item_timestamp},{context_map[last_item_timestamp]}")
+
             tranlation_log.append(f"{translated_text}")
             for i in range(len(related_items)):
-                tranlation_log.append(f"{related_items[i]['text']}")
+                tranlation_log.append(f"{related_items[i]['text']},{related_items[i]['timestamp']},{end_time},last_item_start_time:{last_item_timestamp}")
             tranlation_log.append(f"\n")
 
+            last_end_time = end_time
         return new_dialogue_lines,tranlation_log
 
     def ask_is_available(self):
@@ -1578,8 +1588,9 @@ class TranscriptionApp:
             selected_provider = self.provider_var.get()
             provider_config = self.providers.get(selected_provider, self.providers["DeepSeek"])
             is_available_url = provider_config["is_available_url"]
+            api_key = self.decrypted_api_key[self.provider_var.get()]
             headers = {
-                "Authorization": f"Bearer {self.current_api_key}"
+                "Authorization": f"Bearer {api_key}"
             }
             response = requests.get(is_available_url, headers=headers)
             if response.status_code == 200:
@@ -1690,7 +1701,8 @@ class TranscriptionApp:
             messagebox.showerror("错误", "请先选择ASS文件")
             return
 
-        if not self.current_api_key:
+        current_provider = self.provider_var.get() 
+        if not self.api_keys[current_provider]:
             messagebox.showerror("错误", "请先设置API密钥")
             return
 
@@ -1814,33 +1826,29 @@ class TranscriptionApp:
             self.root.after(0, lambda: self.log_segment(f"分析过程中出错: {str(e)}"))
 
     def parallel_analyze_segment_summary(self, batch_texts):
-        """并行调用AI分段总结API，一次性发送多批次的请求"""
+        """并行调用AI分段总结API，支持逐次重试机制"""
 
         max_workers = 32  # 最大并发数
         max_retries = 3  # 最大重试次数
-        retry_delay = 5  # 秒
 
         # 获取当前服务商配置
         selected_provider = self.provider_var.get()
         provider_config = self.providers.get(selected_provider, self.providers["DeepSeek"])
         api_url = provider_config["api_url"]
         ai_model = self.ai_model
-
-        # 创建线程池
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        api_key = self.decrypted_api_key[self.provider_var.get()]
 
         # 创建锁用于线程安全
         lock = threading.Lock()
 
         # 存储结果
         results = {}
-        failed_batches = []
 
         # 定义单个批次的总结函数
         def summarize_single_batch(batch_id, batch_text, retry_count=0):
             """总结单个批次的函数"""
             try:
-                client = OpenAI(api_key=self.current_api_key, base_url=api_url)
+                client = OpenAI(api_key=api_key, base_url=api_url)
 
                 # 构建提示词
                 system_prompt = self.get_segment_summary_prompt()
@@ -1874,10 +1882,11 @@ class TranscriptionApp:
                 else:
                     response = client.chat.completions.create(
                         model=ai_model,
-                        messages=messages,
-                        max_tokens=8192,
+                        messages=messages,      
+                        max_tokens=393216,                  
                         temperature=self.temperature,
                         response_format={"type": "json_object"},
+                        extra_body={"thinking": {"type": "disabled"}},
                         stream=False
                     )
 
@@ -1932,33 +1941,41 @@ class TranscriptionApp:
                     }
                 return batch_id, False, None, 0
 
-        # 提交所有总结任务
-        future_to_batch_id = {}
+        # 首次提交所有总结任务
+        self.log("首次提交所有总结批次...")
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         for batch_id, batch_text in batch_texts.items():
             # 控制发送速率：每秒一个请求
             time.sleep(1)
-            future = executor.submit(summarize_single_batch, batch_id, batch_text)
-            future_to_batch_id[future] = batch_id
-
-        # 等待所有任务完成
+            executor.submit(summarize_single_batch, batch_id, batch_text)
         executor.shutdown(wait=True)
 
-        # 处理失败的批次（重试）
-        for batch_id, result in list(results.items()):
-            if not result['success'] and result.get('retry_count', 0) < max_retries:
-                failed_batches.append((batch_id, batch_texts[batch_id], result.get('retry_count', 0) + 1))
+        # 逐次重试：最多重试 max_retries 次
+        for retry_round in range(1, max_retries + 1):
+            # 筛选出需要重试的批次
+            failed_batches = []
+            for batch_id, result in list(results.items()):
+                if not result['success'] and result.get('retry_count', 0) < retry_round:
+                    failed_batches.append((batch_id, batch_texts[batch_id], retry_round))
 
-        # 重试失败的批次
-        if failed_batches:
-            self.log(f"开始重试 {len(failed_batches)} 个失败的批次")
+            if not failed_batches:
+                # 没有失败的批次，提前退出重试循环
+                break
+
+            self.log(f"第 {retry_round} 次重试：开始重试 {len(failed_batches)} 个失败的批次")
             retry_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-
             for batch_id, batch_text, retry_count in failed_batches:
                 time.sleep(1)  # 控制重试发送速率
-                future = retry_executor.submit(summarize_single_batch, batch_id, batch_text, retry_count)
-                future_to_batch_id[future] = batch_id
-
+                retry_executor.submit(summarize_single_batch, batch_id, batch_text, retry_count)
             retry_executor.shutdown(wait=True)
+
+            # 检查重试后是否还有失败的批次
+            still_failed = sum(1 for r in results.values() if not r['success'])
+            if still_failed == 0:
+                self.log("所有批次总结成功")
+                break
+            else:
+                self.log(f"第 {retry_round} 次重试后，仍有 {still_failed} 个批次失败")
 
         # 收集最终结果
         successful_results = {}
@@ -2166,14 +2183,13 @@ class TranscriptionApp:
     def run_transcription(self):
         try:
             model_path = self.ASR_model_path.get(self.ASR_model_choice, "")
-
             # 加载模型
             if not self.ASR_model:
                 if self.ASR_model_choice == "Faster Whisper":
                     self.ASR_model = WhisperModel(
                         model_size_or_path=model_path,
                         device="cuda",
-                        compute_type="float16",
+                        compute_type="bfloat16",
                         )
 
                 if self.ASR_model_choice == "Qwen ASR":
@@ -2181,17 +2197,16 @@ class TranscriptionApp:
                         pretrained_model_name_or_path = model_path,
                         dtype=torch.bfloat16,
                         device_map="cuda:0",    
-                        attn_implementation="flash_attention_2",                 
-                        max_inference_batch_size=1, # 减小批次大小，降低显存占用
+                        # attn_implementation="flash_attention_2",                 
+                        max_inference_batch_size=32, # 减小批次大小，降低显存占用
                         max_new_tokens=512, # Maximum number of tokens to generate. Set a larger value for long audio input.
                         forced_aligner=os.path.join(os.path.dirname(model_path), "Qwen3-ForcedAligner-0.6B"),
                         forced_aligner_kwargs=dict(
                             dtype=torch.bfloat16,
                             device_map="cuda:0",  
-                            attn_implementation="flash_attention_2",                          
+                            # attn_implementation="flash_attention_2",                          
                         )
                     )
-
 
             # 判断文件类型，视频还是音频
             file_path = self.input_file.get()
@@ -2223,17 +2238,15 @@ class TranscriptionApp:
             # 执行语音识别，传入进度回调
             self.progress_queue.put(("progress", 0))  # 开始转录
             self.update_status_bar("语音识别模型加载中...")
-            self.transcribe_audio_to_ass(enhanced_audio_path, file_path, progress_callback=update_transcription_progress)
-
+            self.transcribe_audio_to_ass(enhanced_audio_path, file_path, progress_callback=update_transcription_progress)            
+            
             torch.cuda.empty_cache()
 
             # 如果启用AI翻译，执行翻译
-            if self.enable_ai_translation.get():
-                self.update_status_bar("API密钥准备就绪，开始翻译...")
+            if self.enable_ai_translation.get():                
                 threading.Thread(target=self.run_parallel_batch_translation, daemon=True).start()
 
             if self.enable_segment_summary.get():
-                self.update_status_bar("API密钥准备就绪，开始分段总结...")
                 threading.Thread(target=self.run_parallel_segment_summary_analysis, daemon=True).start()
 
             self.progress_queue.put(("progress", 100))
@@ -2332,17 +2345,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
         """使用Faster-Whisper转录音频并生成ASS字幕文件"""
         tic = time.time()
         origin_sub_file_path = os.path.join(os.path.dirname(file_path), os.path.splitext(os.path.basename(file_path))[0] +'.ass')
-
-        # Faster Whisper部分
         self.update_status_bar("正在进行语音识别...")
+        # transcription_log = []
+        # Faster Whisper部分        
         if self.ASR_model_choice == "Faster Whisper":
             segments, info = self.ASR_model.transcribe(
                 audio = audio_path,
                 language = "ja" if self.language_combo.get() == "日语" else "en" if self.language_combo.get() == "英语" else "zh",
                 task = "transcribe",
-                word_timestamps= True,
-                beam_size = self.set_beam_size,
-                hotwords="乃木坂46 弓道 井上和",
+                word_timestamps = True,
+                beam_size = 5,
+                hotwords = self.hotword_entry.get(),
                 vad_filter = self.is_vad_filter,
                 vad_parameters=dict(
                     min_speech_duration_ms=200,    # 过滤短噪音
@@ -2354,9 +2367,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 )
             )
             total_duration = round(info.duration, 2)
-            results= []
-            # with tqdm(total=total_duration, unit=" seconds", disable=True) as pbar:
-            for seg in segments:
+            results= []            
+            for seg in segments:  
+                # for word in seg.words:       
+                    # print("[%.2fs -> %.2fs] %s" % (word.start, word.end, word.word))
 
                 # 使用自适应合并算法处理整个seg对象
                 merged_items = self.merge_fw_items_adaptive(
@@ -2374,182 +2388,241 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                     }
                     results.append(segment_dict)
 
-                    # 更新进度
-                    if progress_callback:
-                        current_progress = min(100, int((merged['end'] / total_duration) * 100))
-                        progress_callback(current_progress)
-
-            toc = time.time()
-            self.update_status_bar(f"听写任务完成，耗时{round(toc-tic)}s")
-
-            # 创建ASS文件
-            ass_content = self.create_ass_header()
-
-            # 处理转录结果
-            for seg in results:
-                start_s = float(seg['start'])
-                end_s = float(seg['end'])
-                text = seg['text'].strip()
-
-                if text:
-                    start_time = self.seconds_to_ass_time(start_s)
-                    end_time = self.seconds_to_ass_time(end_s)
-                    ass_content += f"Dialogue: 0,{start_time},{end_time},原文,,0,0,0,,{text}\n"
-            # 写入ASS文件
-            with open(origin_sub_file_path, 'w', encoding='utf-8-sig') as f:
-                f.write(ass_content)
-                f.write('\n')
-
-            # 处理好的ASS文件地址放入全局变量，如果要AI翻译就直接读取地址
-            normalized_path = origin_sub_file_path.replace('/', '\\')
-            self.subtitle_file_var.set(normalized_path)
-            self.log(f"已生成字幕文件: {normalized_path}")
+                # 更新进度
+                if progress_callback:
+                    current_progress = min(100, int((results[len(results)-1]['end'] / total_duration) * 100))
+                    progress_callback(current_progress)
 
         if self.ASR_model_choice == "Qwen ASR":
-            segments =[]
+            
             info = ffmpeg.probe(audio_path)
             total_duration = round(float(info['format']['duration']), 2)  
             results= []
 
             for chunk in self.ASR_model.transcribe_streaming(
                 audio = audio_path,
+                context = self.hotword_entry.get(),
                 language = "Japanese" if self.language_combo.get() == "日语" else "English" if self.language_combo.get() == "英语" else "Chinese",                    
                 return_time_stamps=True,
             ):
+                segments = {
+                    "text": chunk.text,
+                    "words": []
+                }
+                # print(chunk.text)
                 # 构建字幕段落
-                if chunk.time_stamps:
-                    for item in chunk.time_stamps.items:                        
-                        segments.append({
+                if chunk.time_stamps:                                        
+                    for item in chunk.time_stamps.items: 
+                        # print("[%.2fs -> %.2fs] %s" % (item.start_time, item.end_time, item.text))                       
+                        segments["words"].append({
                             "start": item.start_time,
                             "end": item.end_time,
-                            "text": item.text                     
-                    })                           
+                            "word": item.text
+                        }) 
+                    merged_items = self.merge_qwen_items_adaptive(
+                        segments,
+                        max_chars=50,  # 可配置参数
+                        pause_threshold=0.3  # 可配置参数    
+                    )       
+                    # 将合并后的结果添加到 results
+                    for merged in merged_items:
+                        segment_dict = {
+                            'start': merged['start'],
+                            'end': merged['end'],
+                            'text': merged['text']
+                        }
+                        results.append(segment_dict)
+
                     if progress_callback:
-                        current_progress = min(100, int((segments[len(segments)-1]['end'] / total_duration) * 100))
+                        current_progress = min(100, int((results[len(results)-1]['end'] / total_duration) * 100))
                         progress_callback(current_progress)
 
-            for seg in segments:
-                merged_items = self.merge_qwen_items_adaptive(seg)            
-                # 将合并后的结果添加到 results
-                for merged in merged_items:
-                    segment_dict = {
-                        'start': merged['start'],
-                        'end': merged['end'],
-                        'text': merged['text']
-                    }
-                    results.append(segment_dict)
-            
-            # Flush最后一个累积的句子
-            final_items = self.merge_qwen_items_adaptive_flush()
-            for merged in final_items:
-                segment_dict = {
-                    'start': merged['start'],
-                    'end': merged['end'],
-                    'text': merged['text']
-                }
-                results.append(segment_dict)
+        toc = time.time()
+        self.log(f"听写任务完成，耗时{round(toc-tic)}s")   
 
-            # Flush最后一个累积的句子
-            final_items = self.merge_qwen_items_adaptive_flush()
-            for merged in final_items:
-                segment_dict = {
-                    'start': merged['start'],
-                    'end': merged['end'],
-                    'text': merged['text']
-                }
-                results.append(segment_dict)
-
-            # output ASS file
-            toc = time.time()
-            self.log(f"听写任务完成，耗时{round(toc-tic)}s")   
-
-            # 创建ASS文件
-            ass_content = self.create_ass_header()
+        # output ASS file
+        ass_content = self.create_ass_header()
+        last_end_s = results[0]['start']
+        #处理转录结果
+        for seg in results:                         
+            start_s = float(seg['start'])
+            end_s = float(seg['end'])
+            text = seg['text'].strip()
             
-            #处理转录结果
-            for seg in results: 
-                # print(seg)          
-                start_s = float(seg['start'])
-                end_s = float(seg['end'])
-                text = seg['text'].strip()
-           
-                start_time = self.seconds_to_ass_time(start_s)
-                end_time = self.seconds_to_ass_time(end_s)
-                ass_content += f"Dialogue: 0,{start_time},{end_time},原文,,0,0,0,,{text}\n"
-            
-            # 写入ASS文件
-            with open(origin_sub_file_path, 'w', encoding='utf-8-sig') as f:
-                f.write(ass_content)
-            
-            # 处理好的ASS文件地址放入全局变量，如果要AI翻译就直接读取地址 
-            normalized_path = origin_sub_file_path.replace('/', '\\')
-            self.subtitle_file_var.set(normalized_path)        
-            self.log(f"已生成字幕文件: {normalized_path}")        
+            if start_s < last_end_s:
+                start_s = last_end_s
+            if end_s <= start_s:
+                end_s = start_s + 0.01
+            start_time = self.seconds_to_ass_time(start_s)
+            end_time = self.seconds_to_ass_time(end_s)
+            ass_content += f"Dialogue: 0,{start_time},{end_time},原文,,0,0,0,,{text}\n"
+            last_end_s = end_s
+        # 写入ASS文件
+        with open(origin_sub_file_path, 'w', encoding='utf-8-sig') as f:
+            f.write(ass_content)
+            f.write('\n')
 
-    def merge_qwen_items_adaptive(self, seg):
+        # 处理好的ASS文件地址放入全局变量，如果要AI翻译和总结就直接读取地址 
+        normalized_path = origin_sub_file_path.replace('/', '\\')
+        self.subtitle_file_var.set(normalized_path)        
+        self.log(f"已生成字幕文件: {normalized_path}")        
+
+    def merge_qwen_items_adaptive(self, seg, max_chars, pause_threshold):
         """
-        简化版的自适应合并 Qwen ASR 分词结果
-        按照用户要求：将前后时间间隔不超过0.3s的seg合并为一个句子，
-        直到有seg的start与前一个seg的end间隔超过0.3s便另起一行
+        自适应合并Qwen ASR分词结果
+        先标点分句，再max_chars和pause_threshold细分，最后精确匹配
         
         参数:
-            seg: 包含时间戳信息的字典，格式为 {'start': float, 'end': float, 'text': str}
-            max_chars: 最大字符数限制（保留参数，但主要使用pause_threshold）
-            pause_threshold: 停顿时间阈值（秒，默认0.3秒）
+            seg: 从Qwen ASR每次chunk输出内容提取组合的 Segment 对象，包含：
+                - seg["text"]: Qwen ASR每个语音切片段转录出的完整带标点文本
+                - seg.words: 包含seg["text"]中每个词的开始结束时间和文本，是列表对象
+                - seg["words"]["start"]: 单词开始时间
+                - seg.["words"]["end"]: 单词结束时间
+                - seg.["words"]["word"]: 单词文本
+            max_chars: 最大字符数限制（默认50个字符，用户可自定义）
+            pause_threshold: 停顿时间阈值（秒，默认0.3秒，用户可自定义）
         
         返回:
-            合并后的字典列表
-        """
-        pause_threshold = 0.3
-        # 使用实例变量来维护状态
-        if not hasattr(self, '_qwen_merge_state'):
-            self._qwen_merge_state = {
-                'current_segment': None,
-                'last_end_time': None
-            }
+            合并后的字典列表，格式与 Qwen ASR 一致
+        """       
+        split_punctuation_marks = ['。', '!', '?', '…', ' ', '、', '，','？']
+        text_punctuation_marks = ['。', '!', '?', '…', ' ', '、', '，', '？', '！', '.', ',', ';', ':', '"', "'", '「', '」', '『', '』', '《', '》','・']
         
-        state = self._qwen_merge_state
+        def remove_punctuation(text):
+            for punc in text_punctuation_marks:
+                text = text.replace(punc, '')
+            return text
         
-        # 如果没有时间戳信息，直接返回
-        if not seg or 'start' not in seg or 'end' not in seg or 'text' not in seg:
-            return []
+        final_merged_segments = []
+        word_idx = 0  # Pointer for the `seg.words` list
         
-        result = []
+        # 第一步：通过分句标点将 `seg.text` 划分成多个概念句（conceptual sentences）
+        conceptual_sentences = []  # 存储原始语句和去除标点的语句 {'original_text': '...', 'clean_text': '...'}
+        current_sentence_builder = []  # Accumulates characters from `seg.text`
         
-        # 如果是第一个seg或者时间间隔超过阈值
-        if state['last_end_time'] is None or (seg['start'] - state['last_end_time']) > pause_threshold:
-            # 如果有之前的句子，先返回它
-            if state['current_segment'] is not None:
-                result.append(state['current_segment'])
+        for char in seg["text"]:
+            current_sentence_builder.append(char)
+            if char in split_punctuation_marks:
+                sentence_original = "".join(current_sentence_builder).strip()
+                if sentence_original:
+                    conceptual_sentences.append({
+                        'original_text': sentence_original,
+                        'clean_text': remove_punctuation(sentence_original).strip()
+                    })
+                current_sentence_builder = []  # 为下一句重置
+        
+        # 处理最后一个概念句，防止最后一个seg["text"] 没有以标点结尾
+        if current_sentence_builder:
+            sentence_original = "".join(current_sentence_builder).strip()
+            if sentence_original:
+                conceptual_sentences.append({
+                    'original_text': sentence_original,
+                    'clean_text': remove_punctuation(sentence_original).strip()
+                })
+        
+        # 第二步：从seg.words寻找每个概念句相关的word，然后在每句最多字符和停顿阈值规则做更详细的分句
+        for sentence_info in conceptual_sentences:
+            sentence_clean_text = sentence_info['clean_text']
             
-            # 开始新的句子
-            state['current_segment'] = {
-                'start': seg['start'],
-                'end': seg['end'],
-                'text': seg['text']
-            }
-        else:
-            # 合并到当前句子
-            state['current_segment']['end'] = seg['end']
-            state['current_segment']['text'] += seg['text']
-        
-        # 更新最后的时间
-        state['last_end_time'] = seg['end']
-        
-        return result
+            if not sentence_clean_text:  # 跳过只有标点或者空的概念句
+                continue
+            
+            current_punctuation_sentence_words = []
+            consumed_clean_text_from_words = ""
+            
+            # 尝试收集属于目前概念句的seg.words            
+            while word_idx < len(seg["words"]):
+                word = seg["words"][word_idx]
+                word_clean_text = remove_punctuation(word["word"]).strip()
+                
+                # 检查无标点句子剩余部分是否以无标点词语开头
+                remaining_sentence_clean_text = sentence_clean_text[len(consumed_clean_text_from_words):]
+                
+                # 满足无标点词语存在且剩余无标点句子以无标点词语开始条件就收集当前word的信息（包括开始和结束时间）
+                if word_clean_text and remaining_sentence_clean_text.startswith(word_clean_text):
+                    current_punctuation_sentence_words.append(word)
+                    consumed_clean_text_from_words += word_clean_text
+                    word_idx += 1
+                else:
+                    # This word does not seem to belong to the current conceptual sentence
+                    # or it's a mismatch (e.g., ASR output differs significantly from seg.text after cleaning).
+                    break
+            
+            # 现在current_punctuation_sentence_words拥有对齐于这个基于标点分段概念句的words信息
+            # 开始按照次级分句规则（每句最大长度和停顿阈值）对目前的概念句做次级分句
+            
+            if not current_punctuation_sentence_words:
+                continue  # No words in seg.words matched this punctuation sentence segment
+            
+            current_sub_segment_buffer = []  # 存储目前小句的相关信息
+            current_sub_segment_text_content = ""  # 用于计算的无标点语句
+            
+            for i, word in enumerate(current_punctuation_sentence_words):
+                word_clean_text = remove_punctuation(word["word"]).strip()
+                
+                # 收集潜在新小句元素
+                potential_new_text_content = ""
+                if current_sub_segment_text_content:
+                    potential_new_text_content = current_sub_segment_text_content + word_clean_text  # 不包含空格，只做长度检查
+                else:
+                    potential_new_text_content = word_clean_text
+                
+                # 检查停顿目前word的开始时间是否与缓存语句结束时间相差超过pause_threshold
+                is_long_pause_before_this_word = False
+                if current_sub_segment_buffer:  # Only check if current_sub_segment_buffer is not empty
+                    last_word_in_buffer = current_sub_segment_buffer[-1]
+                    if (word["start"] - last_word_in_buffer["end"]) > pause_threshold:
+                        is_long_pause_before_this_word = True
+                
+                should_break_segment = False
+                
+                # 情况一: 在当前词前检测到长停顿
+                if is_long_pause_before_this_word:
+                    should_break_segment = True
+            
+                # 情况二: 添加当前词后本句过长，而且此词语已经加入到缓存语句中了
+                # 保证长词汇还是能够被作为一个独立部分被对待
+                elif current_sub_segment_buffer and len(potential_new_text_content) > max_chars:
+                    should_break_segment = True
+                
 
-    def merge_qwen_items_adaptive_flush(self):
-        """
-        刷新并返回最后一个累积的句子
-        """
-        if hasattr(self, '_qwen_merge_state') and self._qwen_merge_state['current_segment'] is not None:
-            result = [self._qwen_merge_state['current_segment']]
-            # 重置状态
-            self._qwen_merge_state['current_segment'] = None
-            self._qwen_merge_state['last_end_time'] = None
-            return result
-        return []
-
+                # 满足以上两种情况中的任何一种就会进入次级分句流程
+                if should_break_segment:
+                    # 截断目前的current_sub_segment_buffer将其作为一个小句独立出来
+                    first_word = current_sub_segment_buffer[0]
+                    last_word = current_sub_segment_buffer[-1]
+                    
+                    # 以原始的语句（程序还以为words["word"]带标点，后期可以修复）为这个分段重建语句和开始结束时间
+                    reconstructed_text = "".join([w["word"] for w in current_sub_segment_buffer]).strip()
+                    
+                    final_merged_segments.append({
+                        'start': first_word["start"],
+                        'end': last_word["end"],
+                        'text': reconstructed_text
+                    })
+                    
+                    # 以目前词语作为新的次级分句的起始语句
+                    current_sub_segment_buffer = [word]
+                    current_sub_segment_text_content = word_clean_text
+                else:
+                    # 不满足条件，继续累积
+                    current_sub_segment_buffer.append(word)
+                    current_sub_segment_text_content = potential_new_text_content
+            
+            # After iterating through all `current_punctuation_sentence_words`,
+            # add any remaining words in `current_sub_segment_buffer`
+            if current_sub_segment_buffer:
+                first_word = current_sub_segment_buffer[0]
+                last_word = current_sub_segment_buffer[-1]
+                # 从current_sub_segment_buffer中的words信息重建实际文本
+                reconstructed_text = "".join([w["word"] for w in current_sub_segment_buffer]).strip()
+                final_merged_segments.append({
+                    'start': first_word["start"],
+                    'end': last_word["end"],
+                    'text': reconstructed_text  # 使用子分段对应的实际文本
+                })
+        
+        return final_merged_segments
 
     def merge_fw_items_adaptive(self, seg, max_chars, pause_threshold):
         """
@@ -2767,12 +2840,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
             current_model = self.ai_model
             current_temperature = self.temperature
             current_batch_size = self.batch_size_entry.get()
+            current_hotword = self.hotword_entry.get()
 
             # 检查是否有参数改变
             if (current_prompt != preset_data.get("system_prompt", "") or
                 current_model != preset_data.get("ai_model", "") or
-                current_temperature != preset_data.get("temperature", 1.3) or
-                current_batch_size != preset_data.get("batch_size", 80)): # 默认值保持一致
+                current_temperature != preset_data.get("temperature", 0.3) or
+                current_batch_size != preset_data.get("batch_size", 200) or 
+                current_hotword != preset_data.get("hotword_entry", "")): # 默认值保持一致
                 self.is_modified = True
 
         self.update_window_title()
@@ -2845,6 +2920,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
         self.batch_size_entry.delete(0, tk.END)
         self.batch_size_entry.insert(0, str(self.batch_size))
 
+    def update_hotword_label(self):
+        """更新热词输入框的显示"""
+
+        self.hotword_entry.delete(0, tk.END)
+        self.hotword_entry.insert(0, str(self.hotword))        
+
     def update_markdown_preview(self, event=None):
         """更新Markdown预览区并保持滚动位置"""
         if self.prompt_text.edit_modified():
@@ -2907,10 +2988,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 pass
 
     def update_temperature_label(self):
-        """根据滑块位置更新温度数值显示"""
+        """根据滑块位置更新温度数值显示"""        
         self.temperature = self.temperature_scale.get()
         self.temperature_label.config(text=f"{self.temperature:.1f}")
-        # 同步到转写选项卡
+        # 同步到转写选项卡       
         self.temperature_label_trans.config(text=f"{self.temperature:.1f}")
 
     def update_prompt_text(self):
@@ -3036,7 +3117,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
         selected_model = self.ASR_model_combo.get()
         if selected_model in ["Faster Whisper", "Qwen ASR"]:
             self.ASR_model_choice = selected_model
-            self.ASR_model = None  # 切换模型时重置已加载的模型实例  
+            # self.ASR_model = None  # 切换模型时重置已加载的模型实例  
             normalized_path = self.ASR_model_path.get(self.ASR_model_choice, "").replace('/', '\\')
             self.ASR_model_path_var.set(normalized_path)
             self.save_config()       
@@ -3133,7 +3214,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                     # 保存到对应服务商的字典中
                     current_provider = self.provider_var.get()
                     self.api_keys[current_provider] = encrypted_api_key
-                    self.current_api_key = encrypted_api_key
                     self.api_key_entry.delete(0, tk.END)
                     self.api_key_entry.insert(0, "***已加密***")
                     self.save_config()
@@ -3152,7 +3232,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
     def ensure_api_key_ready(self):
         """确保API密钥已准备就绪，如果需要解密则处理解密流程"""
 
-        if not self.current_api_key:
+        current_provider = self.provider_var.get() 
+        if not self.api_keys[current_provider]:
             return (False, "未设置API密钥")
 
         if self.provider_var.get() in self.decrypted_api_key:
@@ -3178,7 +3259,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
 
     def decrypt_api_key(self):
         """解密API密钥，支持密码错误时重新输入"""
-        if not self.current_api_key or not self.crypto.is_encrypted(self.current_api_key):
+        
+        current_provider = self.provider_var.get() 
+        if not self.api_keys[current_provider] or not self.crypto.is_encrypted(self.api_keys[current_provider]):
             return True, "无需解密"
 
         max_attempts = 5  # 最大重试次数
@@ -3274,7 +3357,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
         return False, "解密过程异常结束"
 
     def validate_api_key(self, api_key):
-        """验证API密钥有效性"""
+        """通过让服务商返回模型列表方式验证API密钥有效性"""
         current_provider = self.provider_var.get()
         provider_config = self.providers.get(current_provider, self.providers["DeepSeek"])
         api_url = provider_config["api_url"]
@@ -3443,7 +3526,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                         # 保存到对应服务商的字典中
                         current_provider = self.provider_var.get()
                         self.api_keys[current_provider] = encrypted_api_key
-                        self.current_api_key = encrypted_api_key
                         self.api_key_entry.delete(0, tk.END)
                         self.api_key_entry.insert(0, "***已加密***")
 
@@ -3512,20 +3594,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
             self.update_LLM_model_menu_trans()
 
             # 加载该服务商的API密钥
-            self.current_api_key = self.api_keys.get(provider_name, "")
+            current_api_key = self.api_keys.get(provider_name, "")
 
             # 更新UI显示
             self.api_key_entry.delete(0, tk.END)
-            if self.current_api_key and self.current_api_key != "***已加密***":
+            if current_api_key and current_api_key != "***已加密***":
                 self.api_key_entry.insert(0, "***已加密***")
             else:
-                self.api_key_entry.insert(0, self.current_api_key)
+                self.api_key_entry.insert(0, current_api_key)
 
             self.api_key_entry_trans.delete(0, tk.END)
-            if self.current_api_key and self.current_api_key != "***已加密***":
+            if current_api_key and current_api_key != "***已加密***":
                 self.api_key_entry_trans.insert(0, "***已加密***")
             else:
-                self.api_key_entry_trans.insert(0, self.current_api_key)
+                self.api_key_entry_trans.insert(0, current_api_key)
 
             # 立即更新菜单显示选中状态
             self.update_provider_menu()
@@ -3579,29 +3661,35 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
 
                     # 根据当前预设加载当前服务商，API密钥和模型设置
                     self.provider_var.set(self.presets.get(self.current_preset, {}).get('provider', 'DeepSeek'))
-                    self.current_api_key = self.api_keys.get(self.provider_var.get(), "")
-                    self.ai_model = self.presets.get(self.current_preset, {}).get('ai_model', 'deepseek-chat')
-                    self.temperature = self.presets.get(self.current_preset, {}).get('temperature', 1.3)
+                    current_api_key = self.api_keys.get(self.provider_var.get(), "")
+                    self.ai_model = self.presets.get(self.current_preset, {}).get('ai_model', 'deepseek-v4-flash')
+                    self.temperature = self.presets.get(self.current_preset, {}).get('temperature', 0.3)
                     self.system_prompt = self.presets.get(self.current_preset, {}).get('system_prompt', '你是一个专业的翻译助手，请将以下日文字幕翻译成中文，保持原有的格式和结构。')
+                    
+                    self.temperature_scale.set(self.temperature)
+                    self.temperature_scale_trans.set(self.temperature)
 
-                    # 刷新批处理大小显示
-                    self.batch_size = self.presets.get(self.current_preset, {}).get('batch_size', 80)
+                    # 获取批处理大小数据
+                    self.batch_size = self.presets.get(self.current_preset, {}).get('batch_size', 200)
+
+                    # 获取热词
+                    self.hotword = self.presets.get(self.current_preset, {}).get('hotword', "")
 
                     # 加载供应商和模型列表配置
                     self.providers = config.get('providers', self.providers)  # 如果配置文件中没有providers，则使用默认配置
 
                     # 更新api输入框
                     self.api_key_entry.delete(0, tk.END)
-                    if self.current_api_key and self.current_api_key != "***已加密***":
+                    if current_api_key and current_api_key != "***已加密***":
                         self.api_key_entry.insert(0, "***已加密***")
                     else:
-                        self.api_key_entry.insert(0, self.current_api_key)
+                        self.api_key_entry.insert(0, current_api_key)
 
                     self.api_key_entry_trans.delete(0, tk.END)
-                    if self.current_api_key and self.current_api_key != "***已加密***":
+                    if current_api_key and current_api_key != "***已加密***":
                         self.api_key_entry_trans.insert(0, "***已加密***")
                     else:
-                        self.api_key_entry_trans.insert(0, self.current_api_key)
+                        self.api_key_entry_trans.insert(0, current_api_key)
 
                     # 更新UI
                     self.update_provider_menu()
@@ -3610,6 +3698,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                     self.update_LLM_model_menu_trans()
                     self.update_preset_menu()
                     self.update_batch_size_label()
+                    self.update_hotword_label()
 
                     # 刷新温度滑块和标签
                     self.update_temperature_label()
@@ -3648,17 +3737,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
 
         if file_path:
             normalized_path = file_path.replace('/', '\\')
-            self.input_file.set(normalized_path)
-            self.output_dir.set(os.path.dirname(file_path))
+            self.input_file.set(normalized_path)            
             self.log(f"已选择文件: {normalized_path}")
 
     def browse_ASR_model_folder(self):
         """选择语音识别模型文件夹"""
         folder_path = filedialog.askdirectory(title="选择模型文件夹")
         if folder_path:
-            self.ASR_model_path = folder_path
+            self.ASR_model_path[self.ASR_model_choice] = folder_path
             normalized_path = folder_path.replace('/', '\\')
-            self.ASR_model_path_var.set(folder_path)
+            self.ASR_model_path_var.set(normalized_path)
             self.save_config()
             self.log(f"已选择模型文件夹: {normalized_path}")
             self.ASR_model = None
@@ -3796,13 +3884,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 self.temperature = preset['temperature']
                 self.system_prompt = preset['system_prompt']
                 self.provider_var.set(preset['provider'])
-                self.batch_size = preset.get('batch_size', 80) # 从新的当前预设加载batch_size
+                self.batch_size = preset.get('batch_size', 200) # 从新的当前预设加载batch_size
+                self.hotword = preset.get('hotword',"")
                 self.current_preset = preset_name
 
             # 更新UI
             self.update_provider_menu()
             self.update_LLM_model_menu()
             self.update_batch_size_label()
+            self.update_hotword_label()
             self.update_temperature_label()
             self.update_prompt_text()
 
@@ -3841,13 +3931,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
             self.temperature = preset['temperature']
             self.system_prompt = preset['system_prompt']
             self.provider_var.set(preset['provider'])
-            self.batch_size = preset.get('batch_size', 80) # 从预设加载batch_size，如果不存在则默认80
+            self.batch_size = preset.get('batch_size', 200) # 从预设加载batch_size，如果不存在则默认200
+            self.hotword = preset.get('hotword',"")
             self.current_preset = preset_name
 
             # 更新UI
             self.update_provider_menu()
             self.update_preset_menu()
             self.update_batch_size_label()
+            self.update_hotword_label()
 
             # 刷新温度滑块和标签
             self.update_temperature_label()
@@ -3942,6 +4034,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
         current_temperature = round(float(self.temperature_scale.get()), 1)  # 只保留一位小数
         current_provider = self.provider_var.get()
         current_batch_size = self.batch_size_entry.get()
+        current_hotword = self.hotword_entry.get()
 
         # 保存预设信息
         self.presets[self.current_preset] = {
@@ -3949,7 +4042,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
             "ai_model": current_model,
             "temperature": current_temperature,
             'provider': current_provider,
-            'batch_size': current_batch_size
+            'batch_size': current_batch_size,
+            'hotword': current_hotword
         }
 
         # 更新当前实例的配置
